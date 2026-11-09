@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -e
+ROOT=$(cd "$(dirname "$0")" && pwd)
+# Synchronization commands work even before local Python environment installation.
+if [[ "${1:-}" == upload || "${1:-}" == remote ]]; then exec python3 "$ROOT/cli.py" "$@"; fi
+source "$ROOT/env.sh"
+exec python "$ROOT/cli.py" "$@"

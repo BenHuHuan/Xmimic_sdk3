@@ -1,0 +1,19 @@
+.venv/
+output/
+vendor/
+__pycache__/
+*.pyc
+*.log
+
+# Local diagnostics and historical installation workspaces
+*_smoke.txt
+README.old*
+sdk/local_setup/*
+!sdk/local_setup/check_sdk_a_hardware.py
+sdk/policy/sdk_a_to/*.before_*
+sdk/policy/sdk_a_to/*before*.txt
+MUJOCO_LOG.TXT
+*.bag
+
+sdk/AGENTS.md.tbd
+sdk/lib/24/

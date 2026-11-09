@@ -1,0 +1,72 @@
+"""
+Finite State Machine (FSM) Module
+Python equivalent of the C++ FSM system
+"""
+from abc import ABC, abstractmethod
+from enum import Enum
+
+from common.joystick import ControlFlag
+from common.robot_data import RobotData
+
+
+class FSMStateName(Enum):
+    """FSM状态枚举"""
+    SDK_A = 16   # SDK-A TO 30k full-body recovery/tracking
+    STOP = 0      # 停止状态
+    ZERO = 1      # 零位状态
+    WALKAMP = 2   # WALKAMP策略状态
+    BEYONDMIMIC = 3  # beyondMimic策略状态
+    BEYONDZERO = 4  # beyondZero策略状态
+    WALKLION = 5  # walkLion策略状态
+    WALKLIONDWAQ = 6  # walkLionDWAQ策略状态
+    LIONZERO = 7  # shared prep pose before walkLion policies
+    POLICYZERO = 8  # smooth bridge between WalkLion-series and BeyondMimic
+    WALKDEPTH = 9 # 深度感知行走策略状态
+    STAND = 10     # 站立/迈步策略状态
+    WALKDEPTH100HZ = 11 # 深度感知行走策略状态
+    MULTIAMP = 12 # Dex29 student: stand/walk <-> prone
+    DEXAMP = 13   # Dex23 AMP; independent internal enum, websocket ID is 4
+    DEXDELTA = 15 # Dex15 Delta/MSL
+
+class FSMState(ABC):
+    """FSM状态抽象基类"""
+
+    def __init__(self, robot_data: RobotData):
+        self.robot_data_ = robot_data
+
+    @abstractmethod
+    def on_enter(self):
+        """进入状态时的行为"""
+        pass
+
+    @abstractmethod
+    def run(self, flag: ControlFlag):
+        """运行状态的正常行为"""
+        pass
+
+    @abstractmethod
+    def on_exit(self):
+        """退出状态时的行为"""
+        pass
+
+    @abstractmethod
+    def check_transition(self, flag: ControlFlag) -> FSMStateName:
+        """检查状态转换"""
+        pass
+
+class RobotFSM(ABC):
+    """机器人FSM抽象基类"""
+
+    def __init__(self, robot_data: RobotData):
+        self.robot_data_ = robot_data
+        # self.disable_joints_ = False
+
+    @abstractmethod
+    def run_fsm(self, flag: ControlFlag):
+        """运行FSM"""
+        pass
+
+    @abstractmethod
+    def get_current_state(self) -> FSMStateName:
+        """获取当前FSM状态"""
+        pass

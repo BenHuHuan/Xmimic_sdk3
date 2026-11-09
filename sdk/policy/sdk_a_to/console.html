@@ -1,0 +1,7 @@
+<!doctype html><meta charset="utf-8"><title>Tiangong 3 SDK-A</title>
+<style>body{font:24px sans-serif;margin:3em;background:#eee}button{font:24px sans-serif;padding:1em;margin:1em}#stop{background:#e44;color:white}</style>
+<h1>Tiangong 3 · SDK-A TO 30k</h1><p id="status">Connecting</p>
+<p>STOP / ZERO / SDK-A. SDK-A automatically blends Tracking and Recovery.</p>
+<button onclick="send('init_pose')">ZERO</button><button onclick="send('run_policy')">SDK-A</button><button id="stop" onclick="send('stop')">STOP</button>
+<p>STOP is a software hold state, not a physical emergency stop.</p>
+<script>const ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/console');ws.onopen=()=>statusText('Connected');ws.onclose=()=>statusText('Disconnected');function statusText(t){document.getElementById('status').textContent=t}function send(n){if(ws.readyState!==1)return;ws.send(JSON.stringify({type:'events',data:JSON.stringify({events:[{name:n,value:2}]})}));statusText('Sent '+n)}document.onkeydown=e=>{if(e.code==='Space'){e.preventDefault();send('stop')}};</script>

@@ -1,0 +1,14 @@
+*.pyc
+.vscode
+.venv
+__pycache__/
+.history
+bag/
+*.onnx
+*.pt
+*.pth
+log
+Log
+scripts/Log
+tests/
+docs/
