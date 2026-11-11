@@ -1,7 +1,69 @@
-<!doctype html><meta charset="utf-8"><title>Tiangong 3 SDK-A</title>
-<style>body{font:24px sans-serif;margin:3em;background:#eee}button{font:24px sans-serif;padding:1em;margin:1em}#stop{background:#e44;color:white}</style>
-<h1>Tiangong 3 · SDK-A TO 30k</h1><p id="status">Connecting</p>
-<p>STOP / ZERO / SDK-A. SDK-A automatically blends Tracking and Recovery.</p>
-<button onclick="send('init_pose')">ZERO</button><button onclick="send('run_policy')">SDK-A</button><button id="stop" onclick="send('stop')">STOP</button>
-<p>STOP is a software hold state, not a physical emergency stop.</p>
-<script>const ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/console');ws.onopen=()=>statusText('Connected');ws.onclose=()=>statusText('Disconnected');function statusText(t){document.getElementById('status').textContent=t}function send(n){if(ws.readyState!==1)return;ws.send(JSON.stringify({type:'events',data:JSON.stringify({events:[{name:n,value:2}]})}));statusText('Sent '+n)}document.onkeydown=e=>{if(e.code==='Space'){e.preventDefault();send('stop')}};</script>
+<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Tiangong 3 SDK-A</title>
+<style>
+body{font:20px system-ui,sans-serif;margin:1.5em auto;max-width:980px;padding:0 1em;background:#f2f4f7;color:#111}
+h1{margin:0 0 .3em;font-size:28px}
+.bar{background:#fff;border-radius:10px;padding:.8em 1em;margin:.8em 0;box-shadow:0 1px 4px rgba(0,0,0,.08)}
+.label{font-size:15px;color:#555;margin-bottom:.4em;font-weight:600}
+button{font:20px system-ui,sans-serif;padding:.7em 1.1em;margin:.3em;border-radius:8px;border:1px solid #ccc;background:#fff;cursor:pointer}
+button:active{transform:scale(.98)}
+button.active{background:#1b8f4b;color:#fff;border-color:#15723b;font-weight:600}
+#stop{background:#d93838;color:#fff;border-color:#b52828;font-weight:700}
+#filter_toggle.active{background:#1b8f4b;color:#fff}
+</style>
+<h1>Tiangong 3 · SDK-A TO 30k</h1>
+<div class="bar" id="status">Connecting...</div>
+<div class="bar">
+  <div class="label">FSM 状态切换 (空格键急停锁死 STOP)</div>
+  <button id="btn_ZERO" onclick="send('init_pose')">ZERO</button>
+  <button id="btn_FIX" onclick="send('fix')">FIX</button>
+  <button id="btn_SDK-A" onclick="send('run_policy')">SDK-A</button>
+  <button id="btn_WALK" onclick="send('walk')">WALK</button>
+  <button id="stop" onclick="send('stop')">STOP</button>
+</div>
+<div class="bar">
+  <div class="label">部署关节低通滤波 (100Hz EMA，抑制策略高频抖动，支持运行中实时切换)</div>
+  <button id="filter_toggle" onclick="send('filter_toggle')">滤波开关: OFF</button>
+  <button id="flt_off" onclick="send('filter_off')">关闭 (RAW)</button>
+  <button id="flt_light" onclick="send('filter_light')">轻度 (α=0.50)</button>
+  <button id="flt_med" onclick="send('filter_on')">标准 (α=0.35)</button>
+  <button id="flt_strong" onclick="send('filter_strong')">强滤波 (α=0.25)</button>
+</div>
+<div class="bar">
+  <div class="label">SDK-A 参考动作窗口 (REF)</div>
+  <button id="ref_STAND" onclick="send('ref_stand')">REF STAND (50..240)</button>
+  <button id="ref_DANCE" onclick="send('ref_dance')">REF DANCE (250..430)</button>
+  <button id="ref_FULL" onclick="send('ref_full')">REF FULL (0..6573)</button>
+</div>
+<p style="font-size:15px;color:#666">STOP 为软件位置保持态，非硬件断电急停。</p>
+<script>
+const ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/console');
+let wsOk=false;
+ws.onopen=()=>{wsOk=true;pollStatus()};
+ws.onclose=()=>{wsOk=false;document.getElementById('status').textContent='Disconnected'};
+function send(n){
+  if(ws.readyState!==1)return;
+  ws.send(JSON.stringify({type:'events',data:JSON.stringify({events:[{name:n,value:2}]})}));
+  setTimeout(pollStatus,80);
+}
+async function pollStatus(){
+  if(!wsOk)return;
+  try{
+    const r=await fetch('/sdk_a/status');
+    const s=await r.json();
+    const fc=s.filter_cutoff_hz?` (${s.filter_cutoff_hz.toFixed(1)}Hz)`:'';
+    const ftxt=s.filter_enabled?`ON α=${s.filter_alpha}${fc}`:'OFF (RAW)';
+    document.getElementById('status').textContent=`Connected | State: ${s.state} | Filter: ${ftxt} | REF: ${s.ref_name} (${s.ref_start}..${s.ref_end})`;
+    ['ZERO','FIX','SDK-A','WALK'].forEach(k=>{const el=document.getElementById('btn_'+k);if(el)el.classList.toggle('active',s.state===k)});
+    ['STAND','DANCE','FULL'].forEach(k=>{const el=document.getElementById('ref_'+k);if(el)el.classList.toggle('active',s.ref_name===k)});
+    const ft=document.getElementById('filter_toggle');
+    ft.textContent=s.filter_enabled?`滤波开关: ON (α=${s.filter_alpha})`:'滤波开关: OFF';
+    ft.classList.toggle('active',!!s.filter_enabled);
+    document.getElementById('flt_off').classList.toggle('active',!s.filter_enabled);
+    document.getElementById('flt_light').classList.toggle('active',s.filter_enabled&&Math.abs(s.filter_alpha-0.50)<1e-3);
+    document.getElementById('flt_med').classList.toggle('active',s.filter_enabled&&Math.abs(s.filter_alpha-0.35)<1e-3);
+    document.getElementById('flt_strong').classList.toggle('active',s.filter_enabled&&Math.abs(s.filter_alpha-0.25)<1e-3);
+  }catch(e){}
+}
+setInterval(pollStatus,500);
+document.onkeydown=e=>{if(e.code==='Space'){e.preventDefault();send('stop')}};
+</script>

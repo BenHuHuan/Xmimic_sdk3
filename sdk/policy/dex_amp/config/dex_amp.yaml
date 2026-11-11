@@ -25,7 +25,7 @@ model_path: dex23_amp_isaaclab_terrain_base_48700.onnx  # 基础胶囊，48700�
 # model_path: dex23_amp_v32_history8_scale025_23500.onnx  # full-DR微调；与V29部署参数相同
 motor_num: 29
 actions_size: 23
-dt: 0.02  # unified SDK loop 50Hz; same 20ms inference period
+dt: 0.01
 joint_names: [hip_pitch_l_joint, hip_roll_l_joint, hip_yaw_l_joint, knee_pitch_l_joint, ankle_pitch_l_joint, ankle_roll_l_joint,
   hip_pitch_r_joint, hip_roll_r_joint, hip_yaw_r_joint, knee_pitch_r_joint, ankle_pitch_r_joint, ankle_roll_r_joint,
   waist_yaw_joint, waist_roll_joint, waist_pitch_joint, shoulder_pitch_l_joint, shoulder_roll_l_joint, shoulder_yaw_l_joint,
@@ -33,7 +33,7 @@ joint_names: [hip_pitch_l_joint, hip_roll_l_joint, hip_yaw_l_joint, knee_pitch_l
 control:
   torque_limit_enabled: true  # 每个主循环在完整目标（含保持关节）上限幅
   action_scale: [0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25]
-  decimation: 1
+  decimation: 2
   warm_start_time: 0.3
 normalization:
   clip_scales:

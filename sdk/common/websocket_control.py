@@ -248,7 +248,7 @@ class WebsocketController:
 
     def _load_config(self):
         try:
-            config_path = os.path.join(".", "config", "dex_config.yaml")
+            config_path = getattr(self.robot_data, "config_file_", "") or os.environ.get("XMIGCS_CONFIG") or os.path.join(".", "config", "dex_config.yaml")
             with open(config_path, "r") as f:
                 cfg = yaml.safe_load(f) or {}
             ws_cfg = cfg.get("websocket", {}) or {}
@@ -360,12 +360,25 @@ class WebsocketController:
     def complete_terminal_requests(self):
         pending=getattr(self,'_terminal_pending',[])
         self._terminal_pending=[]
-        targets={'stop':'STOP','init_pose':'ZERO','run_policy':'SDK_A','walk':'DEXAMP'}
+        targets={'fix':'FIX','stop':'STOP','init_pose':'ZERO','run_policy':'SDK_A','walk':'DEXAMP'}
         state=self.fsm.get_current_state().name
         label={'SDK_A':'SDK-A','DEXAMP':'WALK'}.get(state,state)
         for event,reply in pending:
-            if event=='terminal_vel':
+            if event=='terminal_vel' and state=='DEXAMP':
                 reply.put(f'Velocity applied: {self.flag.x_speed_command:g} {self.flag.y_speed_command:g} {self.flag.yaw_speed_command:g}')
+            elif event=='terminal_ref':
+                from FSM.fsm_base import FSMStateName
+                sdka=self.fsm.state_objects.get(FSMStateName.SDK_A)
+                s=sdka.settings.get('ref_start',0);e=sdka.settings.get('ref_end',6573);rname=getattr(sdka,'ref_name',f'{s}..{e}')
+                reply.put(f'SDK-A reference: {rname} (frames {s}..{e}, {(e-s+1)*0.02:.2f}s loop) | Current state: {label}')
+            elif event=='terminal_filter':
+                from FSM.fsm_base import FSMStateName
+                sdka=self.fsm.state_objects.get(FSMStateName.SDK_A)
+                en=bool(getattr(sdka,'action_filter_enabled',False))
+                al=float(getattr(sdka,'action_filter_alpha',1.0))
+                fc=sdka.action_filter_cutoff_hz() if hasattr(sdka,'action_filter_cutoff_hz') else None
+                fdesc=f'ON (alpha={al:g}, fc={fc:.1f}Hz @ {1.0/sdka.control_dt:g}Hz)' if en and fc is not None else 'OFF (raw policy target)'
+                reply.put(f'SDK-A action filter: {fdesc} | Current state: {label}')
             elif targets.get(event)==state:reply.put('Current state: '+label)
             else:reply.put('Transition not completed. Current state: '+label)
 
@@ -380,6 +393,37 @@ class WebsocketController:
                 self._terminal_pending.append((event,reply))
             return ok
         with self.flag_mutex:
+            web_filter_map={
+                'filter_toggle':('toggle',None),
+                'filter_on':('on',0.35),
+                'filter_light':('on',0.50),
+                'filter_strong':('on',0.25),
+                'filter_off':('off',None),
+            }
+            if name in web_filter_map:
+                name,value='terminal_filter',web_filter_map[name]
+            if name == 'terminal_filter':
+                from FSM.fsm_base import FSMStateName
+                sdka=self.fsm.state_objects.get(FSMStateName.SDK_A) if self.fsm else None
+                if sdka is None or not hasattr(sdka,'set_action_filter'):
+                    print('FILTER rejected: SDK-A state is not loaded.',flush=True);return False
+                mode,alpha=value
+                enabled={'on':True,'off':False,'toggle':None}[mode]
+                en,al=sdka.set_action_filter(enabled=enabled,alpha=alpha)
+                fc=sdka.action_filter_cutoff_hz()
+                fdesc=f'ON (alpha={al:g}, fc={fc:.1f}Hz)' if en and fc is not None else 'OFF'
+                print(f'SDK-A action filter set to {fdesc}',flush=True);return True
+            if name in ('ref_stand','ref_dance','ref_full'):
+                from .state_terminal import REF_PRESETS
+                name,value='terminal_ref',REF_PRESETS[name.split('_',1)[1].upper()]
+            if name == 'terminal_ref':
+                from FSM.fsm_base import FSMStateName
+                sdka=self.fsm.state_objects.get(FSMStateName.SDK_A) if self.fsm else None
+                if sdka is None or not hasattr(sdka,'set_reference_window'):
+                    print('REF rejected: SDK-A state is not loaded.',flush=True);return False
+                start,end,rname=value
+                sdka.set_reference_window(start,end,rname)
+                print(f'SDK-A reference set to {rname} ({start}..{end})',flush=True);return True
             # a value=2 right after value=1 of the same key is the release
             # half of a desktop press/release pair -> apply only once
             if name == 'terminal_vel':
@@ -392,6 +436,11 @@ class WebsocketController:
                 self.flag.x_speed_command,self.flag.y_speed_command,self.flag.yaw_speed_command=clipped
                 self.flag.enable=True
                 print('VEL applied vx/vy/wz = '+str(clipped),flush=True);return True
+            if name == 'fix':
+                self.flag.x_speed_command=self.flag.y_speed_command=self.flag.yaw_speed_command=0.0
+                self.flag.enable=True
+                self.flag.fsm_state_command='gotoFIX';self.flag.fsm_event_id+=1
+                return True
             if name == 'walk':
                 if not self.fsm.ensure_walk(): return False
                 self.flag.x_speed_command=self.flag.y_speed_command=self.flag.yaw_speed_command=0.0
@@ -583,6 +632,22 @@ class WebsocketController:
             )
         )
 
+    async def _handle_sdka_status(self, request):
+        from FSM.fsm_base import FSMStateName
+        state = self.fsm.get_current_state().name if self.fsm else "UNKNOWN"
+        label = {"SDK_A": "SDK-A", "DEXAMP": "WALK"}.get(state, state)
+        sdka = self.fsm.state_objects.get(FSMStateName.SDK_A) if self.fsm else None
+        payload = {
+            "state": label,
+            "ref_name": getattr(sdka, "ref_name", "FULL") if sdka else None,
+            "ref_start": sdka.settings.get("ref_start", 0) if sdka else None,
+            "ref_end": sdka.settings.get("ref_end", 6573) if sdka else None,
+            "filter_enabled": bool(getattr(sdka, "action_filter_enabled", False)) if sdka else False,
+            "filter_alpha": float(getattr(sdka, "action_filter_alpha", 0.35)) if sdka else 0.35,
+            "filter_cutoff_hz": sdka.action_filter_cutoff_hz() if (sdka and hasattr(sdka, "action_filter_cutoff_hz")) else None,
+        }
+        return self._cors(web.Response(text=json.dumps(payload), content_type="application/json"))
+
     async def _handle_index(self, request):
         if self.fsm.config.get("sdk_a_only", False):
             from pathlib import Path
@@ -646,6 +711,7 @@ class WebsocketController:
         asyncio.set_event_loop(self._loop)
         app = web.Application()
         app.router.add_get("/", self._handle_index)
+        app.router.add_get("/sdk_a/status", self._handle_sdka_status)
         app.router.add_get("/monitor/headers", self._handle_headers)
         app.router.add_get("/monitor/stateslist", self._handle_stateslist)
         app.router.add_get("/setting/control/get", self._handle_control_get)

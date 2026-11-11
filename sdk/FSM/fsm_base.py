@@ -11,6 +11,7 @@ from common.robot_data import RobotData
 
 class FSMStateName(Enum):
     """FSM状态枚举"""
+    FIX = 17     # Timed fixed-standing PD state
     SDK_A = 16   # SDK-A TO 30k full-body recovery/tracking
     STOP = 0      # 停止状态
     ZERO = 1      # 零位状态

@@ -35,7 +35,7 @@ def controller(args):
     from FSM.fsm_base import FSMStateName
     meta=json.loads((HERE/'manifest.json').read_text());meta.update(contract=str(HERE/'deploy.json'),scene=str(PROJECT/meta['scene']));contract=json.loads(Path(meta['contract']).read_text())
     rclpy.init();node=Node('tiangong_sdk_a_controller')
-    data=RobotData();interface=RobotInterfaceImpl(data,str(DEPLOY/'local_setup/sim_workspace/config/sdk_a.yaml'))
+    data=RobotData();data.control_dt_=0.02;interface=RobotInterfaceImpl(data,str(DEPLOY/'local_setup/sim_workspace/config/sdk_a.yaml'))
     interface.init(node);assert interface.sim;interface.current_state=FSMStateName.SDK_A
     from FSM.robot_fsm import get_robot_fsm
     fsm=get_robot_fsm(data,{"sdk_a_only":True});skill=fsm.state_objects[FSMStateName.SDK_A]
@@ -64,9 +64,10 @@ def controller(args):
         raw_quat=np.array([imu.orientation.w,imu.orientation.x,imu.orientation.y,imu.orientation.z])
         pelvis=qmul(raw_quat,inverse);pelvis/=np.linalg.norm(pelvis)
         gyro=R@np.array([imu.angular_velocity.x,imu.angular_velocity.y,imu.angular_velocity.z])
+        acc=R@np.array([imu.linear_acceleration.x,imu.linear_acceleration.y,imu.linear_acceleration.z])
         if state['reset']:skill.on_enter()
         skill.phase=case['phase'];skill.running=case['running']
-        data.sdk_a_pelvis_quat=pelvis;data.sdk_a_gyro=gyro
+        data.sdk_a_pelvis_quat=pelvis;data.sdk_a_gyro=gyro;data.sdk_a_acc=acc
         frame=case['phase']+state['counter']
         sim_flag=ControlFlag();sim_flag.fsm_state_command='gotoSDK_A'
         fsm.run_fsm(sim_flag)
@@ -76,6 +77,8 @@ def controller(args):
         obj=dict(id=case['id'],running=case['running'],counter=state['counter'],phase=frame,
             wall_time=now,weights=weights[0].tolist(),target=target[0].tolist(),raw=raw[0].tolist(),
             sensor_age_s=max(ages),sensor_group_skew_s=max(map(stamp,msgs))-min(map(stamp,msgs)),policy_interval_s=dt)
+        if getattr(skill,'protection_telemetry',None) is not None:
+            obj['protection']=skill.protection_telemetry
         pub.publish(String(data=json.dumps(obj)))
         if case['running']:
             state.update(counter=state['counter']+1,reset=False,history=hist,raw=raw)
@@ -133,8 +136,11 @@ def simulator(args):
             self.imu_status_pub=node.create_publisher(Imu,'/imu/status',10)
             node.create_subscription(String,'/sdk_a/telemetry',lambda m:setattr(self,'telemetry',json.loads(m.data)),10)
             node.create_subscription(String,'/sdk_a/performance',lambda m:setattr(self,'performance',json.loads(m.data)),10)
+            self.fix_requests=queue.Queue()
+            node.create_subscription(String,'/xrobot3/sim_fix',lambda m:self.fix_requests.put(m.data),10)
             self.case_pub=node.create_publisher(String,'/sdk_a/case',10)
             self.mount=np.array([1.,0.,0.,0.] if args.standard_sdk else meta['imu_mount_quat']);self.mount_R=qrot(self.mount)
+            self.acc_sensor_id=self.model.sensor('imu_in_pelvis_acc').id if any(self.model.sensor(i).name=='imu_in_pelvis_acc' for i in range(self.model.nsensor)) else -1
             self.cached_q=np.zeros(29);self.cached_v=np.zeros(29)
         def get_status(self,name):
             i=self.indices[name]
@@ -143,11 +149,12 @@ def simulator(args):
         def capture_sensors(self):
             d=self.data
             self.cached_q=d.qpos[7:].copy();self.cached_v=d.qvel[6:].copy()
+            pelvis_acc=d.sensor(self.acc_sensor_id).data.astype(float) if self.acc_sensor_id>=0 else np.zeros(3)
             self.last_sensor_data=dict(joint_positions=dict(zip(self.joint_names,d.qpos[7:].astype(float))),
                 joint_velocities=dict(zip(self.joint_names,d.qvel[6:].astype(float))),
                 joint_torques=dict(zip(self.joint_names,d.actuator_force.astype(float))),
                 imu_orientation=qmul(d.qpos[3:7],self.mount),
-                imu_angular_velocity=self.mount_R.T@d.qvel[3:6],imu_linear_acceleration=np.zeros(3))
+                imu_angular_velocity=self.mount_R.T@d.qvel[3:6],imu_linear_acceleration=self.mount_R.T@pelvis_acc)
         def publish(self):
             for group in ('leg','waist','arm'):
                 self._publish_joint_group(getattr(self,group+'_joint_names'),getattr(self,group+'_status_pub'),self.last_sensor_data)
@@ -162,6 +169,9 @@ def simulator(args):
     if args.viewer and not args.interactive:
         import mujoco.viewer
         viewer=mujoco.viewer.launch_passive(model,d);viewer.cam.distance=3.5;viewer.cam.elevation=-25
+    from sim_suspension import SimSuspension
+    suspension=SimSuspension(float(model.body_mass.sum()))
+    suspension_body=model.body('waist_pitch_link').id
     dt=float(model.opt.timestep);substeps=round(.02/dt)
     try:
         for case in cases:
@@ -188,19 +198,45 @@ def simulator(args):
                 angle=np.deg2rad(case['angle_deg']);direction=np.array([np.cos(angle),np.sin(angle),0.])
             for step in (itertools.count() if args.interactive else range(round(seconds/dt))):
                 if args.interactive and not render_bridge.is_running():break
+                if args.interactive and render_bridge.poll_state_override(model,d,fixtures[fixture_id+'_qpos'],fixtures[fixture_id+'_qvel']):
+                    sim.capture_sensors();sim.publish();deadline=time.monotonic()
+                if args.interactive and render_bridge.is_paused():
+                    now=time.monotonic()
+                    if now-last_pub>=.01:
+                        sim.capture_sensors();sim.publish();last_pub=now
+                    for command in render_bridge.read_commands():sim.fix_requests.put(command)
+                    while not sim.fix_requests.empty():
+                        suspension.command(sim.fix_requests.get_nowait(),d.xpos[suspension_body])
+                    render_bridge.shared[11]=float(suspension.enabled)
+                    render_bridge.shared[12]=suspension.target[2]
+                    render_bridge.shared[15]=suspension.stiffness
+                    render_bridge.update(d, sim.performance)
+                    deadline=time.monotonic()
+                    time.sleep(0.01)
+                    continue
                 if step%max(1,round(.01/dt))==0:sim.capture_sensors()
                 # Async low-level loop; fresh encoders for PD every 1 ms. DDS status is separate.
                 now=time.monotonic()
                 if now-last_pub>=.0025:
                     sim.capture_sensors();sim.publish();last_pub=now
                 sim.set_motor_cmd();d.xfrc_applied[:]=0
-                if args.interactive:render_bridge.apply_force(d)
+                if args.interactive:
+                    render_bridge.apply_ctrl_noise(model,d)
+                    render_bridge.apply_force(d)
                 t=step*dt
                 if case['kind']=='push' and case['push_time_s']<=t<case['push_time_s']+.2:
                     if not np.any(push_vector):
                         yaw=np.arctan2(2*(d.qpos[3]*d.qpos[6]+d.qpos[4]*d.qpos[5]),1-2*(d.qpos[5]**2+d.qpos[6]**2))
                         push_vector=case['force_N']*np.array([np.cos(yaw)*direction[0]-np.sin(yaw)*direction[1],np.sin(yaw)*direction[0]+np.cos(yaw)*direction[1],0])
                     d.xfrc_applied[model.body('waist_pitch_link').id,:3]=push_vector
+                if render_bridge and step%10==0:
+                    for command in render_bridge.read_commands():sim.fix_requests.put(command)
+                while not sim.fix_requests.empty():
+                    suspension.command(sim.fix_requests.get_nowait(),d.xpos[suspension_body])
+                if suspension.enabled:
+                    velocity=np.zeros(6)
+                    mujoco.mj_objectVelocity(model,d,mujoco.mjtObj.mjOBJ_BODY,suspension_body,velocity,0)
+                    d.xfrc_applied[suspension_body,:3]+=suspension.force(d.xpos[suspension_body],velocity[3:])
                 mujoco.mj_step(model,d)
                 if not np.isfinite(d.qpos).all():raise RuntimeError('Nonfinite state '+case['id'])
                 if step%substeps==0:
@@ -222,14 +258,19 @@ def simulator(args):
                         counter=tele.get('counter',-1),telemetry_age=time.time()-tele.get('wall_time',time.time()))
                     records.append(record)
                     if step%1000==0:
-                        status=dict(performance=sim.performance,sim_s=float(d.time),wall_s=time.monotonic()-began,height=float(d.qpos[2]),up=float(up),gate=record['weights'].tolist(),policy_counter=record['counter'],sensor_age_s=record['sensor_age'],policy_dt_s=record['policy_interval'],motor_count=len(sim.last_raw_joint_commands),solver_iterations=int(model.opt.iterations),ls_iterations=int(model.opt.ls_iterations))
+                        status=dict(suspension_stiffness=suspension.stiffness,suspension_enabled=suspension.enabled,suspension_target_height=float(suspension.target[2]),physics_dt_s=dt,physics_hz=1/dt,performance=sim.performance,sim_s=float(d.time),wall_s=time.monotonic()-began,height=float(d.qpos[2]),up=float(up),gate=record['weights'].tolist(),policy_counter=record['counter'],sensor_age_s=record['sensor_age'],policy_dt_s=record['policy_interval'],motor_count=len(sim.last_raw_joint_commands),solver_iterations=int(model.opt.iterations),ls_iterations=int(model.opt.ls_iterations))
                         if render_bridge:status.update(viewer_fps=float(render_bridge.shared[4]),render_separate_process=True)
                         (args.output/'live_status.json').write_text(json.dumps(status))
                     if viewer and not args.interactive and step%(substeps*2)==0:viewer.cam.lookat[:]=d.qpos[:3];viewer.sync()
-                if args.interactive and step%10==0:render_bridge.update(d, sim.performance)
-                deadline+=dt
+                if args.interactive and step%2==0:
+                    render_bridge.shared[11]=float(suspension.enabled)
+                    render_bridge.shared[12]=suspension.target[2]
+                    render_bridge.shared[15]=suspension.stiffness
+                    render_bridge.update(d, sim.performance)
+                deadline+=dt*(render_bridge.slowdown() if args.interactive else 1.0)
                 remaining=deadline-time.monotonic()
                 if remaining>0:time.sleep(remaining)
+                elif remaining<-.1:deadline=time.monotonic()
             if args.interactive:return
             trace={key:np.asarray([r[key] for r in records]) for key in records[0]}
             np.savez_compressed(dest/'trace.npz',**trace)
@@ -286,7 +327,8 @@ def main():
     a=p.parse_args()
     if a.interactive:
         a.viewer=True;a.cases='normal_p0'
-        print('INTERACTIVE: Tiangong SDK-A TO fixed0.25 + ground v2 DDP2 30k [rmisxwp3] | xMIGCS -> ROS2/FastDDS -> xmujoco | Newton100 LS50 1000Hz | no automatic push | double-click torso, Ctrl+right drag | close window to exit',flush=True)
+        _m=json.loads((HERE/'manifest.json').read_text())
+        print(f"INTERACTIVE: Tiangong SDK-A {_m.get('training_run','TO 30k')} [{_m['checkpoint_sha256'][:12]}] | xMIGCS -> ROS2/FastDDS -> xmujoco | Newton100 LS50 1000Hz | no automatic push | double-click torso, Ctrl+right drag | close window to exit",flush=True)
     if os.getenv('ROS_LOCALHOST_ONLY')!='1' and not a.standard_sdk:raise RuntimeError('Legacy evaluation uses localhost-only DDS')
     if a.role=='controller':controller(a)
     elif a.role=='simulator':simulator(a)

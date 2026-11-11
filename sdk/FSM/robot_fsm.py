@@ -9,6 +9,7 @@ from .fsm_base import RobotFSM, FSMStateName
 from policy.walk_amp.fsm_walkamp import FSMStateWALKAMP
 from policy.zero.fsm_zero import FSMStateZero
 from policy.stop.fsm_stop import FSMStateStop
+from policy.fix.fsm_fix import FSMStateFix
 from policy.beyond_mimic.fsm_beyond_mimic import FSMStateBeyondMimic
 from policy.beyondzero.fsm_beyondzero import FSMStateBeyondZero
 from policy.walk_lion.fsm_walklion import FSMStateWalkLion
@@ -82,6 +83,7 @@ class RobotFSMImpl(RobotFSM):
         """初始化所有状态对象"""
         self.state_objects[FSMStateName.STOP] = FSMStateStop(self.robot_data_)
         self.state_objects[FSMStateName.ZERO] = FSMStateZero(self.robot_data_)
+        self.state_objects[FSMStateName.FIX] = FSMStateFix(self.robot_data_)
         if self.config.get("sdk_a_only", False):
             self.state_objects[FSMStateName.SDK_A] = FSMStateSDKA(self.robot_data_)
             return
@@ -107,7 +109,7 @@ class RobotFSMImpl(RobotFSM):
         """运行FSM"""
         # 检查状态转换
         current_state_obj = self.state_objects[self.current_state]
-        next_state = current_state_obj.check_transition(flag)
+        next_state = FSMStateName.FIX if flag.fsm_state_command == 'gotoFIX' else current_state_obj.check_transition(flag)
 
         event = (flag.fsm_state_command, getattr(flag, "fsm_event_id", 0))
         fresh_event = event != self._last_fsm_event

@@ -22,6 +22,12 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 import transforms3d as t3d
 from .body_id_map import BodyServoIdMap
 from .robot_data import RobotData
+from .torque_limiter import (
+    clamp_parallel_ankle_torque,
+    clamp_pd_target_by_torque,
+    enforce_wire_float32_torque_limit,
+    load_sim_effort_limits,
+)
 import functools
 import time
 import math
@@ -147,6 +153,13 @@ class RobotInterfaceImpl(RobotInterface):
         self.ankle_kp_p = np.zeros(4)  # 并联关节刚度
         self.ankle_kd_p = np.zeros(4)  # 并联关节阻尼
 
+        # 仿真力矩上限保护（默认与 deploy.json['effort'] 对齐）
+        self.torque_limit_enabled = False
+        self.torque_limit_scale = 1.0
+        self.torque_limit_states: set[FSMStateName] = set()
+        self.effective_effort_limits: np.ndarray | None = None
+        self.last_torque_limit_stats: Dict[str, Any] = {}
+
         # TF相关属性
         self.tf_buffer = None
         self.tf_listener = None
@@ -228,6 +241,38 @@ class RobotInterfaceImpl(RobotInterface):
         # 脚踝Kp,Kd
         self.ankle_kp_p = np.array(interface_config.get('ankle_kp_p'))
         self.ankle_kd_p = np.array(interface_config.get('ankle_kd_p'))
+
+        # 仿真力矩上限保护配置
+        default_tl_enabled = bool(
+            config.get('sdk_a_hardware', False) or config.get('sdk_a_only', False)
+        )
+        self.torque_limit_enabled = bool(
+            interface_config.get('torque_limit_enabled', default_tl_enabled)
+        )
+        self.torque_limit_scale = float(
+            interface_config.get('torque_limit_scale', 1.0)
+        )
+        if (not self.sim) and self.torque_limit_scale > 1.0:
+            raise ValueError(
+                f"Hardware torque_limit_scale must be <= 1.0, got {self.torque_limit_scale}"
+            )
+        tl_state_names = interface_config.get(
+            'torque_limit_states',
+            ['SDK_A', 'FIX', 'ZERO', 'WALKAMP', 'DEXAMP'],
+        )
+        state_map = FSMStateName.__members__
+        self.torque_limit_states = {
+            state_map[name] for name in tl_state_names if name in state_map
+        }
+        if self.torque_limit_enabled:
+            self.effective_effort_limits = load_sim_effort_limits(
+                contract_path=interface_config.get('torque_limit_contract'),
+                explicit_limits=interface_config.get('effort_limits'),
+                scale=self.torque_limit_scale,
+                expected_dof=self.id_map.whole_motor_nums,
+            )
+        else:
+            self.effective_effort_limits = None
 
         self.depth_cfg = interface_config.get('depth', {})
         self.depth_type = self.depth_cfg.get('type', 'disable')
@@ -786,12 +831,23 @@ class RobotInterfaceImpl(RobotInterface):
 
         Disabled by default.
         """
-        if not self.sim and self.clip_actions:
+        if not self.sim and self.clip_actions and not self._is_torque_limit_active():
             limit = self.id_to_limits[cmd_name]
             clipped_pos = np.clip(position, limit["min"], limit["max"])
             return clipped_pos == position, clipped_pos
         else:
             return True, position
+
+    def _is_torque_limit_active(self) -> bool:
+        return (
+            bool(self.torque_limit_enabled)
+            and self.effective_effort_limits is not None
+            and (not self.disable_joints_)
+            and (
+                len(self.torque_limit_states) == 0
+                or self.current_state in self.torque_limit_states
+            )
+        )
 
     # @timing_decorator
     def convert_to_motor_commands(self):
@@ -809,11 +865,35 @@ class RobotInterfaceImpl(RobotInterface):
         np.multiply(rd.q_dot_d_p_[tail], self.motor_dir, out=rd.q_dot_d_motor_[tail])
         np.multiply(rd.tau_d_p_[tail], self.motor_dir, out=rd.tau_d_motor_[tail])
 
+        if not self.sim and self.clip_actions:
+            for i in range(self.id_map.whole_motor_nums):
+                cmd_id = self.id_map.get_id_by_index(i)
+                if cmd_id in self.id_to_limits:
+                    lim = self.id_to_limits[cmd_id]
+                    rd.q_d_motor_[i + self.floating_base_dof] = float(
+                        np.clip(rd.q_d_motor_[i + self.floating_base_dof], lim["min"], lim["max"])
+                    )
+
         if self.disable_joints_:
             rd.joint_kp_p_.fill(0.0)
             rd.joint_kd_p_.fill(0.0)
             rd.tau_d_motor_.fill(0.0)
             self.node.get_logger().warn("Joints disabled!")
+        elif self._is_torque_limit_active():
+            enforce_wire_float32_torque_limit(
+                q_d_motor=rd.q_d_motor_[tail],
+                q_dot_d_motor=rd.q_dot_d_motor_[tail],
+                tau_d_motor=rd.tau_d_motor_[tail],
+                q_a_p=rd.q_a_p_[tail],
+                q_dot_a_p=rd.q_dot_a_p_[tail],
+                kp_p=rd.joint_kp_p_,
+                kd_p=rd.joint_kd_p_,
+                zero_offset=self.zero_offset,
+                zero_cnt=self.zero_cnt,
+                motor_dir=self.motor_dir,
+                zero_pos=self.zero_pos,
+                effort_limit=self.effective_effort_limits,
+            )
 
     def publish_motor_commands(self, flag: ControlFlag):
         # flag_fsm_command = flag.fsm_state_command
@@ -928,6 +1008,34 @@ class RobotInterfaceImpl(RobotInterface):
         np.copyto(rd.joint_kp_p_, rd.joint_kp_s_)
         np.copyto(rd.joint_kd_p_, rd.joint_kd_s_)
 
+        if self._is_torque_limit_active():
+            tail = slice(self.floating_base_dof, None)
+            q_d_safe, tau_d_safe, tau_raw, tau_clip, clipped_mask = clamp_pd_target_by_torque(
+                q_d=rd.q_d_p_[tail],
+                q_a=rd.q_a_s_[tail],
+                q_dot_a=rd.q_dot_a_s_[tail],
+                kp=rd.joint_kp_p_,
+                kd=rd.joint_kd_p_,
+                effort_limit=self.effective_effort_limits,
+                q_dot_d=rd.q_dot_d_p_[tail],
+                tau_d=rd.tau_d_p_[tail],
+            )
+            rd.q_d_p_[tail] = q_d_safe
+            rd.tau_d_p_[tail] = tau_d_safe
+            self.last_torque_limit_stats = {
+                "active": True,
+                "state": self.current_state.name,
+                "serial_clipped_count": int(clipped_mask.sum()),
+                "max_serial_raw_ratio": float(np.max(np.abs(tau_raw) / self.effective_effort_limits)),
+                "max_serial_cmd_ratio": float(np.max(np.abs(tau_clip) / self.effective_effort_limits)),
+                "parallel_ankle_clipped": False,
+            }
+        else:
+            self.last_torque_limit_stats = {
+                "active": False,
+                "state": self.current_state.name,
+            }
+
         if not self.sim:
             #真机
             self.ankle_serial_to_parallel()
@@ -1017,6 +1125,8 @@ class RobotInterfaceImpl(RobotInterface):
 
         # 3.0 sptlib 使用返回值；不再向预分配数组原地写入。
         success, q_a_s, qdot_a_s, tor_a_s = self.fun_s2p.get_s_state()
+        if not success or any(np.asarray(x).shape != (4,) or not np.isfinite(x).all() for x in (q_a_s, qdot_a_s, tor_a_s)):
+            raise RuntimeError("sptlib get_s_state failed or returned invalid/non-finite ankle state")
 
         if self.debug:
             print("-" * 20 + "并转串联后" + "-" * 20)
@@ -1044,15 +1154,15 @@ class RobotInterfaceImpl(RobotInterface):
         qdot_d_s = np.zeros(4)  # 串联关节速度（期望）
         tor_d_s = np.zeros(4)  # 串联关节力矩（期望）
 
-        q_d_s[:2] = self.robot_data_.q_d_s_[self.left_ankle_indices]  # 左脚踝关节串联命令
-        q_d_s[2:] = self.robot_data_.q_d_s_[
+        q_d_s[:2] = self.robot_data_.q_d_p_[self.left_ankle_indices]  # 左脚踝关节串联命令
+        q_d_s[2:] = self.robot_data_.q_d_p_[
             self.right_ankle_indices]  # 右脚踝关节串联命令
 
-        qdot_d_s[:2] = self.robot_data_.q_dot_d_s_[self.left_ankle_indices]
-        qdot_d_s[2:] = self.robot_data_.q_dot_d_s_[self.right_ankle_indices]
+        qdot_d_s[:2] = self.robot_data_.q_dot_d_p_[self.left_ankle_indices]
+        qdot_d_s[2:] = self.robot_data_.q_dot_d_p_[self.right_ankle_indices]
 
-        tor_d_s[:2] = self.robot_data_.tau_d_s_[self.left_ankle_indices]
-        tor_d_s[2:] = self.robot_data_.tau_d_s_[self.right_ankle_indices]
+        tor_d_s[:2] = self.robot_data_.tau_d_p_[self.left_ankle_indices]
+        tor_d_s[2:] = self.robot_data_.tau_d_p_[self.right_ankle_indices]
 
         q_a_s = np.zeros(4)  # 串联关节角度（实际）
         qdot_a_s = np.zeros(4)  # 串联关节速度（实际）
@@ -1065,16 +1175,25 @@ class RobotInterfaceImpl(RobotInterface):
 
         kp = np.zeros(4)  # 串联关节刚度
         kd = np.zeros(4)  # 串联关节阻尼
-        kp[:2] = self.robot_data_.joint_kp_s_[self.left_ankle_indices -
+        kp[:2] = self.robot_data_.joint_kp_p_[self.left_ankle_indices -
                                               self.floating_base_dof]
-        kp[2:] = self.robot_data_.joint_kp_s_[self.right_ankle_indices -
+        kp[2:] = self.robot_data_.joint_kp_p_[self.right_ankle_indices -
                                               self.floating_base_dof]
-        kd[:2] = self.robot_data_.joint_kd_s_[self.left_ankle_indices -
+        kd[:2] = self.robot_data_.joint_kd_p_[self.left_ankle_indices -
                                               self.floating_base_dof]
-        kd[2:] = self.robot_data_.joint_kd_s_[self.right_ankle_indices -
+        kd[2:] = self.robot_data_.joint_kd_p_[self.right_ankle_indices -
                                               self.floating_base_dof]
 
-        tor_d_s = kp * (q_d_s - q_a_s) + kd * (qdot_d_s - qdot_a_s)
+        tor_d_s = kp * (q_d_s - q_a_s) + kd * (qdot_d_s - qdot_a_s) + tor_d_s
+        tl_active = self._is_torque_limit_active()
+        ankle_lim = None
+        if tl_active:
+            ankle_motor_idx = np.concatenate((
+                self.left_ankle_indices - self.floating_base_dof,
+                self.right_ankle_indices - self.floating_base_dof,
+            ))
+            ankle_lim = self.effective_effort_limits[ankle_motor_idx]
+            tor_d_s = np.clip(tor_d_s, -ankle_lim * (1.0 - 1e-6), ankle_lim * (1.0 - 1e-6))
 
         if self.debug:
             print("-" * 20 + "串转并联前" + "-" * 20)
@@ -1082,11 +1201,29 @@ class RobotInterfaceImpl(RobotInterface):
             print("qdot_d_s:", qdot_d_s)
             print("tor_d_s:", tor_d_s)
 
-        # 串转并计算
-        self.fun_s2p.set_s_des(q_d_s, qdot_d_s, tor_d_s)
+        # 串转并计算：tor_d_s 已由期望 q_d_s 算出；传入 sptlib 的位置参考需落在并联连杆可解域内以避免无效 IK 报错
+        q_d_s_ik = q_d_s.copy()
+        if tl_active:
+            for p_i, r_i in ((0, 1), (2, 3)):
+                p_val = float(np.clip(q_d_s_ik[p_i], -1.10, 0.48))
+                r_val = float(np.clip(q_d_s_ik[r_i], -0.45, 0.45))
+                env_norm = abs(p_val) / 1.10 + abs(r_val) / 0.52
+                if env_norm > 1.0:
+                    p_val /= env_norm
+                    r_val /= env_norm
+                q_d_s_ik[p_i] = p_val
+                q_d_s_ik[r_i] = r_val
+        self.fun_s2p.set_s_des(q_d_s_ik, qdot_d_s, tor_d_s)
         self.fun_s2p.calc_joint_pos_ref()
         self.fun_s2p.calc_joint_tor_des()
         success, q_d_p, qdot_d_p, tor_d_p = self.fun_s2p.get_p_des()
+        if not success or any(np.asarray(x).shape != (4,) or not np.isfinite(x).all() for x in (q_d_p, qdot_d_p, tor_d_p)):
+            raise RuntimeError("sptlib get_p_des failed or returned invalid/non-finite ankle command")
+
+        if tl_active and ankle_lim is not None:
+            tor_d_p, p_clipped = clamp_parallel_ankle_torque(tor_d_p, ankle_lim)
+            if p_clipped and self.last_torque_limit_stats:
+                self.last_torque_limit_stats["parallel_ankle_clipped"] = True
 
         ankle_indices = np.concatenate((self.left_ankle_indices, self.right_ankle_indices))
         q_a_p = self.robot_data_.q_a_p_[ankle_indices]

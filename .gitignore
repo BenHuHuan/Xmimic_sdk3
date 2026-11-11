@@ -1,4 +1,6 @@
 .venv/
+.vscode/
+.idea/
 output/
 vendor/
 __pycache__/
@@ -16,4 +18,3 @@ MUJOCO_LOG.TXT
 *.bag
 
 sdk/AGENTS.md.tbd
-sdk/lib/24/

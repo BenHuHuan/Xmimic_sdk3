@@ -1,5 +1,5 @@
 motor_num: 29
-dt: 0.02
+dt: 0.01
 sim: true
 debug: false
 control_tool: websocket
@@ -48,9 +48,18 @@ websocket:
   echo_interval: 0.5
 robot_interface:
   clip_actions: false
+  torque_limit_enabled: true
+  torque_limit_scale: 1.0
+  torque_limit_states:
+  - SDK_A
+  - FIX
+  - ZERO
+  - WALKAMP
+  - DEXAMP
   waist_control_status:
   - STOP
   - ZERO
+  - FIX
   - SDK_A
   - WALKAMP
   - DEXAMP
@@ -58,6 +67,7 @@ robot_interface:
   arms_control_status:
   - STOP
   - ZERO
+  - FIX
   - SDK_A
   - WALKAMP
   - DEXAMP
@@ -260,3 +270,10 @@ sdk_a:
     contract checked; physical robot not sampled. Custom simulator mount must not
     be applied here.
   imu_input_frame: sdk_body_euler
+  torque_limit_enabled: true
+  torque_limit_scale: 1.0
+  action_filter_enabled: false
+  action_filter_alpha: 0.35
+  ref_name: FULL
+  ref_start: 0
+  ref_end: 6573

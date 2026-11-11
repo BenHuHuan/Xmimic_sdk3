@@ -175,6 +175,11 @@ class XMIGCSControlNode(Node):
             if self.config.get('sdk_a_only', False):
                 from common.state_terminal import start_state_terminal
                 self.websocket_controller.flag.fsm_state_command = 'gotoSTOP'
+                if self.sim:
+                    self.fix_pub = self.create_publisher(String, '/xrobot3/sim_fix', 10)
+                    def request_fix(value):
+                        message=String();message.data=value;self.fix_pub.publish(message)
+                    self.websocket_controller.simulation_fix=request_fix
                 self.state_terminal_thread = start_state_terminal(self.websocket_controller)
 
 
@@ -200,10 +205,10 @@ class XMIGCSControlNode(Node):
         # 初始化时间戳
         time_passed = 0.0
 
-        # 处理手柄数据
-        self._process_controller_data()
-        # 更新机器人数据
+        # Wait for first sensor feedback and latch initial state (e.g. STOP hold pose)
+        # from actual measured joint positions before the first command is sent.
         self._update_robot_data(self.control_flag, time_passed)
+        self.robot_fsm.state_objects[self.robot_fsm.get_current_state()].on_enter()
 
         while self.control_running and rclpy.ok():
 
@@ -237,11 +242,14 @@ class XMIGCSControlNode(Node):
             self._perf_fsm_ms += fsm_ms
             elapsed = time.perf_counter() - self._perf_window
             if elapsed >= 0.5:
+                sdka_obj = self.robot_fsm.state_objects.get(FSMStateName.SDK_A)
+                flt_alpha = float(sdka_obj.action_filter_alpha) if (sdka_obj and getattr(sdka_obj, 'action_filter_enabled', False)) else 0.0
                 message = String()
                 message.data = json.dumps(dict(
                     control_hz=self._perf_count / elapsed,
                     fsm_ms=self._perf_fsm_ms / self._perf_count,
                     state=self.robot_fsm.get_current_state().name,
+                    filter_alpha=flt_alpha,
                     wall_time=time.time()))
                 self.performance_pub.publish(message)
                 self._perf_window = time.perf_counter()

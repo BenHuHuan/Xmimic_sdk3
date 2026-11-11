@@ -9,7 +9,17 @@ HERE=Path(__file__).resolve().parent
 def quat(r): return r.as_quat()[[3,0,1,2]]
 def rotation(q):return R.from_quat(np.asarray(q)[[1,2,3,0]])
 def make_model(meta):
-    model=mujoco.MjModel.from_xml_path(meta['scene'])
+    spec=mujoco.MjSpec.from_file(meta['scene'])
+    if any(b.name=='pelvis' for b in spec.bodies):
+        pelvis=spec.body('pelvis')
+        if 'imu_in_pelvis' not in {s.name for s in spec.sites}:
+            site=pelvis.add_site();site.name='imu_in_pelvis'
+            site.pos=[-0.081641,-0.00010952,-0.063057];site.quat=[1.,0.,0.,0.]
+        if 'imu_in_pelvis_acc' not in {s.name for s in spec.sensors}:
+            sen=spec.add_sensor();sen.name='imu_in_pelvis_acc'
+            sen.type=mujoco.mjtSensor.mjSENS_ACCELEROMETER
+            sen.objtype=mujoco.mjtObj.mjOBJ_SITE;sen.objname='imu_in_pelvis'
+    model=spec.compile()
     model.opt.timestep=.001
     # Official xSIM numerical options; keep training's integrator and plant.
     model.opt.solver=mujoco.mjtSolver.mjSOL_CG;model.opt.iterations=100

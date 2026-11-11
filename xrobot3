@@ -2,6 +2,15 @@
 set -e
 ROOT=$(cd "$(dirname "$0")" && pwd)
 # Synchronization commands work even before local Python environment installation.
-if [[ "${1:-}" == upload || "${1:-}" == remote ]]; then exec python3 "$ROOT/cli.py" "$@"; fi
+if [[ "${1:-}" == deploy || "${1:-}" == upload || "${1:-}" == remote || "${1:-}" == interfaces ]]; then exec python3 "$ROOT/cli.py" "$@"; fi
+# Remote launch needs SSH and Python only, not the local simulation environment.
+if [[ "${1:-}" == run ]]; then
+  for arg in "$@"; do
+    if [[ "$arg" == --host || "$arg" == --host=* ]]; then exec python3 "$ROOT/cli.py" "$@"; fi
+  done
+fi
+if [[ ! -x "$ROOT/.venv/bin/python" ]]; then
+  bash "$ROOT/install.sh"
+fi
 source "$ROOT/env.sh"
 exec python "$ROOT/cli.py" "$@"
