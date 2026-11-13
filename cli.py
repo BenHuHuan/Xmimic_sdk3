@@ -98,18 +98,19 @@ def gpu_render_check():
          'sudo cp /usr/share/doc/nvidia-kernel-common-*/nvidia-powerd.service /etc/systemd/system/ && '
          'sudo systemctl daemon-reload && sudo systemctl enable --now nvidia-powerd',flush=True)
  except Exception:pass
-p=argparse.ArgumentParser(description=__doc__);sub=p.add_subparsers(dest='cmd',required=True)
-r=sub.add_parser('run');r.add_argument('--target',choices=['sim','real'],help=argparse.SUPPRESS);r.add_argument('--mode',choices=['onboard','offboard'],default='onboard',help=argparse.SUPPRESS);r.add_argument('--domain',type=int);r.add_argument('--interface',help='Network adapter: lo starts simulation; any other adapter connects to the robot');r.add_argument('--robot-ip');r.add_argument('--headless',action='store_true');r.add_argument('--seconds',type=float,default=5);r.add_argument('--dry-run',action='store_true')
+p=argparse.ArgumentParser(prog='xrobot3',description=__doc__);sub=p.add_subparsers(dest='cmd',required=True)
+r=sub.add_parser('run',help='Run local simulation, wired offboard, onboard, or SSH remote control');r.add_argument('--target',choices=['sim','real'],help=argparse.SUPPRESS);r.add_argument('--mode',choices=['onboard','offboard'],default='onboard',help=argparse.SUPPRESS);r.add_argument('--domain',type=int);r.add_argument('--interface',help='Network adapter: lo starts simulation; any other adapter connects to the robot');r.add_argument('--robot-ip');r.add_argument('--headless',action='store_true');r.add_argument('--seconds',type=float,default=5);r.add_argument('--dry-run',action='store_true')
 r.add_argument('--physics',choices=['4.0','3.3.7','dev','stable'],default='4.0',help='Simulator MuJoCo: 4.0/dev=MuJoCo 4.0 (.venv-mj4, default), 3.3.7/stable=MuJoCo 3.3.7 (.venv)')
 r.add_argument('--host',help='SSH alias or user@robot IP: run the SDK on the onboard computer')
 r.add_argument('--path',default='Xrobot3',help='Project path on the onboard computer')
 r.add_argument('--port',type=int,default=22,help='SSH port')
+_SUB_HELP={'upload':'Sync workspace to remote robot over SSH','deploy':'Sync workspace and run install.sh on remote robot','remote':'Launch SDK on remote robot over SSH','body':'Start or stop remote onboard body_control driver'}
 for name in ['upload','deploy','remote','body']:
- q=sub.add_parser(name);q.add_argument('--host',required=True,help='SSH alias or user@robot IP');q.add_argument('--path',default='Xrobot3',help='Relative to remote home, or absolute');q.add_argument('--port',type=int,default=22);q.add_argument('--domain',type=int,default=0)
+ q=sub.add_parser(name,help=_SUB_HELP[name]);q.add_argument('--host',required=True,help='SSH alias or user@robot IP');q.add_argument('--path',default='Xrobot3',help='Relative to remote home, or absolute');q.add_argument('--port',type=int,default=22);q.add_argument('--domain',type=int,default=0)
  q.add_argument('--dry-run',action='store_true')
  if name=='body':
   q.add_argument('--stop',action='store_true',help='Stop running body_control process')
-sub.add_parser('check')
+sub.add_parser('check',help='Verify Python environment, ROS 2 messages, and ONNX/deploy contracts')
 sub.add_parser('interfaces',help='List local IPv4 interfaces for wired/wireless DDS')
 a=p.parse_args()
 if a.cmd=='interfaces':
