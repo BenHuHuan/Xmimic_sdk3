@@ -87,8 +87,20 @@ def run_rsync_with_progress(rsync_base):
   msg=render(100.0,final_bytes,avg,_fmt_time(elapsed),final_files,done=True)
  if tty:sys.stdout.write('\r'+msg+'\033[K\n');sys.stdout.flush()
  else:print(msg,flush=True)
+def gpu_render_check():
+ """Warn when the NVIDIA GPU is power/thermal-capped; the viewer then drops to a few FPS."""
+ try:
+  q=subprocess.run(['nvidia-smi','--query-gpu=name,enforced.power.limit,power.default_limit,clocks_event_reasons.sw_thermal_slowdown','--format=csv,noheader,nounits'],capture_output=True,text=True,timeout=3).stdout.strip().splitlines()[0]
+  name,limit,default,thermal=[x.strip() for x in q.split(',')]
+  if float(limit)<0.5*float(default) or thermal=='Active':
+   print(f'WARNING: {name} capped at {float(limit):.0f} W (default {float(default):.0f} W), SW thermal slowdown={thermal}. '
+         'The MuJoCo viewer will stutter. Fix: select the laptop Performance mode on AC, and install nvidia-powerd: '
+         'sudo cp /usr/share/doc/nvidia-kernel-common-*/nvidia-powerd.service /etc/systemd/system/ && '
+         'sudo systemctl daemon-reload && sudo systemctl enable --now nvidia-powerd',flush=True)
+ except Exception:pass
 p=argparse.ArgumentParser(description=__doc__);sub=p.add_subparsers(dest='cmd',required=True)
 r=sub.add_parser('run');r.add_argument('--target',choices=['sim','real'],help=argparse.SUPPRESS);r.add_argument('--mode',choices=['onboard','offboard'],default='onboard',help=argparse.SUPPRESS);r.add_argument('--domain',type=int);r.add_argument('--interface',help='Network adapter: lo starts simulation; any other adapter connects to the robot');r.add_argument('--robot-ip');r.add_argument('--headless',action='store_true');r.add_argument('--seconds',type=float,default=5);r.add_argument('--dry-run',action='store_true')
+r.add_argument('--physics',choices=['4.0','3.3.7','dev','stable'],default='4.0',help='Simulator MuJoCo: 4.0/dev=MuJoCo 4.0 (.venv-mj4, default), 3.3.7/stable=MuJoCo 3.3.7 (.venv)')
 r.add_argument('--host',help='SSH alias or user@robot IP: run the SDK on the onboard computer')
 r.add_argument('--path',default='Xrobot3',help='Project path on the onboard computer')
 r.add_argument('--port',type=int,default=22,help='SSH port')
@@ -143,9 +155,10 @@ if a.cmd in ('upload','deploy','remote','body') or (a.cmd=='run' and a.host):
  sys.exit()
 if a.cmd=='check':
  subprocess.run([sys.executable,str(ROOT/'sdk/local_setup/check_sdk_a_hardware.py')],check=True)
- import mujoco
- m=mujoco.MjModel.from_xml_path(str(ROOT/'sdk/policy/sdk_a_to/scene_unitree_visual.xml'))
- print('Portable simulator model loaded:',m.nq,m.nv);sys.exit()
+ mj4_py=ROOT/'.venv-mj4/bin/python'
+ sim_py=str(mj4_py) if os.access(mj4_py,os.X_OK) else sys.executable
+ subprocess.run([sim_py,'-c',f"import mujoco; m=mujoco.MjModel.from_xml_path({str(ROOT/'sdk/policy/sdk_a_to/scene_unitree_visual.xml')!r}); print('Portable simulator model loaded:', m.nq, m.nv, '(MuJoCo', mujoco.__version__ + ')')"],check=True)
+ sys.exit()
 if a.interface:
  inferred_target='sim' if a.interface=='lo' else 'real'
  if a.target is not None and a.target!=inferred_target:p.error('--target conflicts with --interface; omit --target')
@@ -160,7 +173,16 @@ if a.target=='sim':
  env['ROS_LOCALHOST_ONLY']='1';env['MUJOCO_GL']='glfw'
  env['XMIGCS_CONFIG']=str(ROOT/'sdk/config/sdk_a_sim.yaml')
  out=ROOT/'output'/datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
- command=[sys.executable,str(ROOT/'sdk/policy/sdk_a_to/run_chain.py'),'pair','--standard-sdk','--output',str(out)]
+ python=sys.executable
+ use_mj4=a.physics in ('4.0','dev')
+ if use_mj4:
+  # Default: MuJoCo 4.0 core bindings rebuilt for the ROS Python (vendor/wheels); same SDK/DDS path.
+  python=str(ROOT/'.venv-mj4/bin/python')
+  if not os.access(python,os.X_OK):p.error(f'--physics {a.physics} needs .venv-mj4; run: bash scripts/setup_mujoco4_dev.sh (or pass --physics 3.3.7)')
+  env['VIRTUAL_ENV']=str(ROOT/'.venv-mj4');env['PATH']=str(ROOT/'.venv-mj4/bin')+os.pathsep+env.get('PATH','')
+ print('Physics:',a.physics,'(MuJoCo 4.0)' if use_mj4 else '(MuJoCo 3.3.7)',flush=True)
+ if not a.headless:gpu_render_check()
+ command=[python,str(ROOT/'sdk/policy/sdk_a_to/run_chain.py'),'pair','--standard-sdk','--output',str(out)]
  command+=['--cases','normal_p0','--seconds',str(a.seconds)] if a.headless else ['--interactive']
 else:
  env['ROS_LOCALHOST_ONLY']='0';env['XMIGCS_CONFIG']=str(ROOT/'sdk/config/sdk_a_hardware.yaml')

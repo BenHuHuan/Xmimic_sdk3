@@ -6,18 +6,20 @@ from rclpy.executors import ExternalShutdownException
 import yaml
 
 import signal
-from rl_control_node import XMIGCSControlNode
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+from rl_control_node import XMIGCSControlNode
 
 
 class XMIGCSControlNode_sim(XMIGCSControlNode):
     def __init__(self, debug=False):
-        # # sim=True 经基类构造函数在控制线程启动前生效: 跳过真机并联踝关节
-        # # 求解(MuJoCo 模型踝关节为串联表达, 见 CLAUDE.md 坑 6)
-        # super().__init__(debug, sim=True)
-        super().__init__(debug)
-        print("rewrite sim")
-        self.robot_interface.sim = True
+        # 默认回退到 sdk_a_sim.yaml 配置文件
+        if 'XMIGCS_CONFIG' not in os.environ:
+            sim_cfg = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config', 'sdk_a_sim.yaml')
+            if os.path.isfile(sim_cfg):
+                os.environ['XMIGCS_CONFIG'] = sim_cfg
+        # sim=True 经基类构造函数在控制线程启动前生效: 跳过真机并联踝关节求解
+        # (MuJoCo 仿真中踝关节为串联表达，跳过并联解算与驱动器电流转换)
+        super().__init__(debug, sim=True)
 
 def main(args=None):
     """主函数"""

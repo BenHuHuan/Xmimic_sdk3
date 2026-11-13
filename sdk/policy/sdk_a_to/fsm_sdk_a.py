@@ -23,7 +23,7 @@ class FSMStateSDKA(FSMState):
         cfg=yaml.safe_load(Path(config_path).read_text()) if config_path else {}
         self.hardware=cfg.get('sdk_a_hardware',False)
         self.settings=dict(cfg.get('sdk_a',{}))
-        self.ref_name=self.settings.get('ref_name','FULL')
+        self.ref_name=self.settings.get('ref_name','STAND')
         self.torque_limit_enabled=bool(self.settings.get('torque_limit_enabled',True))
         self.torque_limit_scale=float(self.settings.get('torque_limit_scale',1.0))
         if not np.isfinite(self.torque_limit_scale) or self.torque_limit_scale<=0.0 or (self.hardware and self.torque_limit_scale>1.0):
@@ -138,8 +138,8 @@ class FSMStateSDKA(FSMState):
                     yaw=pelvis.as_euler('xyz')[2]
                     self.heading=Rotation.from_euler('z',yaw).as_quat(scalar_first=True)[None].astype(np.float32)
             sensors=np.r_[d.q_a_s_[6:],d.q_dot_a_s_[6:],d.sdk_a_pelvis_quat,d.sdk_a_gyro][None].astype(np.float32)
-            ref_start=int(self.settings.get('ref_start',0))
-            ref_end=int(self.settings.get('ref_end',6573))
+            ref_start=int(self.settings.get('ref_start',50))
+            ref_end=int(self.settings.get('ref_end',240))
             ref_span=max(1,ref_end-ref_start+1)
             ref_idx=ref_start+((self.phase+self.counter)%ref_span)
             prev_executed_raw=self.raw[0].copy()

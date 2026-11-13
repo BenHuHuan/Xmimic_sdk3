@@ -26,11 +26,12 @@ class RenderBridge:
         self.key_path=str(Path(output)/'viewer_keys.sock')
         Path(self.key_path).unlink(missing_ok=True)
         self.key_socket.bind(self.key_path);self.key_socket.setblocking(False)
-        self.nq=model.nq;self.nv=model.nv;self.nb=model.nbody
+        self.nq=model.nq;self.nv=model.nv;self.nb=model.nbody;self.nu=model.nu
         self.state_len=self.nq+self.nv
         self.frc_offset=32+self.state_len
         self.ovr_offset=self.frc_offset+self.nb*6
-        self.shared=np.lib.format.open_memmap(self.path,mode='w+',dtype=np.float64,shape=(self.ovr_offset+self.state_len,))
+        self.jitter_offset=self.ovr_offset+self.state_len
+        self.shared=np.lib.format.open_memmap(self.path,mode='w+',dtype=np.float64,shape=(self.jitter_offset+self.nu,))
         self.shared[:]=0
         self.shared[0]=1
         self.shared[10]=float(model.opt.timestep)
@@ -38,8 +39,8 @@ class RenderBridge:
         self.shared[14]=1.0  # real-time slowdown factor
         self._last_ovr_seq=0
         self._ctrl_noise=np.zeros(model.nu)
-        self.proc=subprocess.Popen([sys.executable,__file__,str(self.path),str(self.nq),str(self.nv),str(self.nb)])
-    def update(self,data,performance=None):
+        self.proc=subprocess.Popen([sys.executable,__file__,str(self.path),str(self.nq),str(self.nv),str(self.nb),str(self.nu)])
+    def update(self,data,performance=None,jitter_monitor=None):
         a=self.shared;a[1]+=1
         a[32:32+self.nq]=data.qpos;a[32+self.nq:32+self.state_len]=data.qvel
         now=time.monotonic()
@@ -54,6 +55,13 @@ class RenderBridge:
         a[8]=perf.get('fsm_ms',0) if fresh else 0
         a[9]={'STOP':0,'ZERO':1,'SDK_A':2,'DEXAMP':3,'FIX':4}.get(perf.get('state'),-1) if fresh else -1
         a[22]=float(perf.get('filter_alpha',0.0)) if fresh else 0.0
+        if jitter_monitor is not None:
+            a[23]=jitter_monitor.jitter_score
+            a[24]=jitter_monitor.twitch_score
+            a[25]=jitter_monitor.peak_freq_hz
+            a[26]=float(jitter_monitor.peak_joint_idx)
+            a[27]=float(jitter_monitor.active_joints)
+            a[self.jitter_offset:self.jitter_offset+self.nu]=jitter_monitor.severity
         a[2]=data.time;a[5]=now;a[1]+=1
     def apply_force(self,data):
         if time.monotonic()-self.shared[3]<.2:
@@ -100,11 +108,38 @@ class RenderBridge:
 def main():
     import atexit,threading,glfw,mujoco.viewer
     from mujoco import _simulate
-    path=Path(sys.argv[1]);nq,nv,nb=map(int,sys.argv[2:]);a=np.load(path,mmap_mode='r+')
-    state_len=nq+nv;frc_offset=32+state_len;ovr_offset=frc_offset+nb*6
+    path=Path(sys.argv[1]);nq,nv,nb,nu=map(int,sys.argv[2:]);a=np.load(path,mmap_mode='r+')
+    state_len=nq+nv;frc_offset=32+state_len;ovr_offset=frc_offset+nb*6;jitter_offset=ovr_offset+state_len
     xml_path=str(Path(__file__).parent/'scene_unitree_visual.xml')
     model=mujoco.MjModel.from_xml_path(xml_path);data=mujoco.MjData(model)
     model.vis.quality.offsamples=0
+    base_geom_rgba=model.geom_rgba.copy()
+    joint_names=[];joint_geom_ids=[]
+    for j in range(nu):
+        jname=mujoco.mj_id2name(model,mujoco.mjtObj.mjOBJ_JOINT,j+1) or f'joint_{j}'
+        bid=int(model.jnt_bodyid[j+1])
+        geoms=[g for g in range(model.ngeom) if int(model.geom_bodyid[g])==bid]
+        joint_names.append(jname.replace('_joint',''))
+        joint_geom_ids.append(geoms)
+
+    # Real-time scrolling oscilloscope figure for HF jitter & twitch spikes
+    fig=mujoco.MjvFigure()
+    mujoco.mjv_defaultFigure(fig)
+    fig.title='Real-Time Jitter & Twitch (%)'
+    fig.xlabel='History (0.1s/pt)'
+    fig.linename[0]='HF Jitter'
+    fig.linename[1]='Twitch'
+    fig.linergb[0]=[1.0,0.78,0.10]
+    fig.linergb[1]=[1.0,0.18,0.15]
+    fig.linewidth=2.0
+    fig.figurergba=[0.06,0.06,0.08,0.72]
+    fig.panergba=[0.02,0.02,0.04,0.65]
+    fig.flg_extend=0
+    fig.range[0]=[0.0,150.0]
+    fig.range[1]=[0.0,105.0]
+    fig_n=150
+    hist_jitter=np.zeros(fig_n,dtype=np.float32)
+    hist_twitch=np.zeros(fig_n,dtype=np.float32)
     default_qpos=model.key_qpos[0].copy() if model.nkey>0 else model.qpos0.copy()
     default_qvel=model.key_qvel[0].copy() if model.nkey>0 else np.zeros(nv)
     while a[5]==0 and a[0]:time.sleep(.01)
@@ -199,6 +234,24 @@ def main():
                 else:
                     mujoco.mj_forward(model,data)
                     last_qpos=data.qpos.copy();last_qvel=data.qvel.copy();last_time=float(data.time)
+                # 3D joint heatmap glow/pulse on links exhibiting HF jitter or twitching
+                model.geom_rgba[:]=base_geom_rgba
+                j_sev=a[jitter_offset:jitter_offset+nu]
+                pulse_fast=0.5+0.5*np.sin(2.0*np.pi*10.0*now)
+                pulse_warn=0.5+0.5*np.sin(2.0*np.pi*5.0*now)
+                for j,geoms in enumerate(joint_geom_ids):
+                    if not geoms:continue
+                    sev=float(j_sev[j])
+                    if sev>=0.75:
+                        col=np.array([1.0,0.10+0.35*pulse_fast,0.06,1.0],dtype=np.float32)
+                        blend=0.72+0.28*pulse_fast
+                        for g in geoms:
+                            model.geom_rgba[g]=(1.0-blend)*base_geom_rgba[g]+blend*col
+                    elif sev>=0.55:
+                        col=np.array([1.0,0.82,0.08,1.0],dtype=np.float32)
+                        blend=min(0.75,max(0.25,(sev-0.55)/0.20*(0.50+0.25*pulse_warn)))
+                        for g in geoms:
+                            model.geom_rgba[g]=(1.0-blend)*base_geom_rgba[g]+blend*col
                 data.xfrc_applied[:]=0
                 mujoco.mjv_applyPerturbForce(model,data,pert)
                 a[frc_offset:ovr_offset]=data.xfrc_applied.ravel();a[3]=now
@@ -209,12 +262,49 @@ def main():
                 state={0:'STOP',1:'ZERO',2:'SDK-A',3:'WALK',4:'FIX'}.get(int(a[9]),'Waiting for SDK')
                 hang_str=f'ON (z={a[12]:.2f}m, k={a[15]:.0f}N/m)' if a[11]>0.5 else 'OFF (KP+/Up/F9 to hang)'
                 flt_str=f'ON (alpha={a[22]:.2f})' if a[22]>0.0 else 'OFF (RAW)'
-                sim.set_texts([(
-                    int(mujoco.mjtFontScale.mjFONTSCALE_100),
-                    int(mujoco.mjtGridPos.mjGRID_TOPLEFT),
-                    'Simulation time\nReal-time factor\nPhysics steps (measured)\nPhysics rate (configured)\nSDK control (measured)\nFSM compute (mean)\nViewer FPS\nFSM state\nAction filter\nSuspension',
-                    f'{cur_simtime:.1f} s\n{a[6]:.2f} x\n{a[6]/a[10]:.0f} Hz\n{1/a[10]:.0f} Hz\n{a[7]:.1f} Hz\n{a[8]:.2f} ms\n{a[4]:.1f}\n{state}\n{flt_str}\n{hang_str}',
-                )])
+                j_score=float(a[23]);t_score=float(a[24]);p_freq=float(a[25])
+                p_idx=int(a[26]) if 0<=int(a[26])<len(joint_names) else 0
+                act_n=int(a[27])
+                p_name=joint_names[p_idx] if joint_names else 'none'
+                peak_sev=max(j_score,t_score)
+                j_pct=min(100.0,j_score*100.0);t_pct=min(100.0,t_score*100.0)
+                if peak_sev>=0.75:
+                    banner_title='!! FATAL HARDWARE RISK: HF JITTER / SHOCK !!'
+                    banner_body=f'PEAK: {p_name} ({p_freq:.1f} Hz) | Chatter {j_pct:.0f}% | Shock {t_pct:.0f}% | Crit Joints {act_n}'
+                    banner_scale=int(mujoco.mjtFontScale.mjFONTSCALE_150)
+                elif peak_sev>=0.55:
+                    banner_title='! HIGH LOAD / IMPACT WARNING !'
+                    banner_body=f'PEAK: {p_name} ({p_freq:.1f} Hz) | Chatter {j_pct:.0f}% | Shock {t_pct:.0f}%'
+                    banner_scale=int(mujoco.mjtFontScale.mjFONTSCALE_150)
+                else:
+                    banner_title='JITTER MONITOR'
+                    banner_body=f'OK (chatter {j_pct:.1f}%, twitch {t_pct:.1f}%)'
+                    banner_scale=int(mujoco.mjtFontScale.mjFONTSCALE_100)
+                sim.set_texts([
+                    (
+                        int(mujoco.mjtFontScale.mjFONTSCALE_100),
+                        int(mujoco.mjtGridPos.mjGRID_TOPLEFT),
+                        'Simulation time\nReal-time factor\nPhysics steps (measured)\nPhysics rate (configured)\nSDK control (measured)\nFSM compute (mean)\nViewer FPS\nFSM state\nAction filter\nSuspension\nHF Jitter / Twitch',
+                        f'{cur_simtime:.1f} s\n{a[6]:.2f} x\n{a[6]/a[10]:.0f} Hz\n{1/a[10]:.0f} Hz\n{a[7]:.1f} Hz\n{a[8]:.2f} ms\n{a[4]:.1f}\n{state}\n{flt_str}\n{hang_str}\n{j_pct:.0f}% / {t_pct:.0f}% ({act_n} jnt)',
+                    ),
+                    (
+                        banner_scale,
+                        int(mujoco.mjtGridPos.mjGRID_TOP),
+                        banner_title,
+                        banner_body,
+                    ),
+                ])
+                hist_jitter[:-1]=hist_jitter[1:];hist_jitter[-1]=min(105.0,j_pct)
+                hist_twitch[:-1]=hist_twitch[1:];hist_twitch[-1]=min(105.0,t_pct)
+                xs=np.arange(fig_n,dtype=np.float32)
+                fig.linepnt[0]=fig_n;fig.linepnt[1]=fig_n
+                fig.linedata[0,0:2*fig_n:2]=xs;fig.linedata[0,1:2*fig_n:2]=hist_jitter
+                fig.linedata[1,0:2*fig_n:2]=xs;fig.linedata[1,1:2*fig_n:2]=hist_twitch
+                vp=sim.viewport
+                fw=min(360,max(220,int(vp.width*0.26))) if vp.width>0 else 320
+                fh=min(180,max(120,int(vp.height*0.22))) if vp.height>0 else 160
+                fleft=max(8,vp.width-fw-12) if vp.width>fw+16 else 8
+                sim.set_figures([(mujoco.MjrRect(fleft,12,fw,fh),fig)])
                 rendered_frames=0;last_text_time=now
 
             elapsed=now-began

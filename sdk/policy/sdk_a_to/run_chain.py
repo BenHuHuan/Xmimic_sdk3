@@ -170,9 +170,12 @@ def simulator(args):
         import mujoco.viewer
         viewer=mujoco.viewer.launch_passive(model,d);viewer.cam.distance=3.5;viewer.cam.elevation=-25
     from sim_suspension import SimSuspension
+    from jitter_monitor import JitterMonitor
     suspension=SimSuspension(float(model.body_mass.sum()))
     suspension_body=model.body('waist_pitch_link').id
     dt=float(model.opt.timestep);substeps=round(.02/dt)
+    default_qdes=np.asarray(contract['offset'],dtype=np.float64)
+    jitter_monitor=JitterMonitor(sim.joint_names,contract['effort'],dt=dt,policy_dt=.02,kp=contract.get('kp'))
     try:
         for case in cases:
             dest=args.output/case['id'];dest.mkdir(exist_ok=True)
@@ -180,6 +183,7 @@ def simulator(args):
             fixture_id=case.get('fixture_id',case['id'])
             mujoco.mj_resetData(model,d);d.qpos[:]=fixtures[fixture_id+'_qpos'];d.qvel[:]=fixtures[fixture_id+'_qvel']
             mujoco.mj_forward(model,d)
+            jitter_monitor.reset()
             sim.last_raw_joint_commands.clear();sim.telemetry={};sim.group_count={g:0 for g in sim.group_count}
             with sim.joint_cmd_lock:
                 while not sim.raw_joint_commands.empty():sim.raw_joint_commands.get_nowait()
@@ -199,6 +203,7 @@ def simulator(args):
             for step in (itertools.count() if args.interactive else range(round(seconds/dt))):
                 if args.interactive and not render_bridge.is_running():break
                 if args.interactive and render_bridge.poll_state_override(model,d,fixtures[fixture_id+'_qpos'],fixtures[fixture_id+'_qvel']):
+                    jitter_monitor.reset()
                     sim.capture_sensors();sim.publish();deadline=time.monotonic()
                 if args.interactive and render_bridge.is_paused():
                     now=time.monotonic()
@@ -210,7 +215,7 @@ def simulator(args):
                     render_bridge.shared[11]=float(suspension.enabled)
                     render_bridge.shared[12]=suspension.target[2]
                     render_bridge.shared[15]=suspension.stiffness
-                    render_bridge.update(d, sim.performance)
+                    render_bridge.update(d, sim.performance, jitter_monitor=jitter_monitor)
                     deadline=time.monotonic()
                     time.sleep(0.01)
                     continue
@@ -239,6 +244,8 @@ def simulator(args):
                     d.xfrc_applied[suspension_body,:3]+=suspension.force(d.xpos[suspension_body],velocity[3:])
                 mujoco.mj_step(model,d)
                 if not np.isfinite(d.qpos).all():raise RuntimeError('Nonfinite state '+case['id'])
+                q_des=np.array([float(sim.last_raw_joint_commands[n]['pos']) if n in sim.last_raw_joint_commands else float(default_qdes[i]) for i,n in enumerate(sim.joint_names)],dtype=np.float64)
+                jitter_monitor.update(d.qvel[6:],d.actuator_force,q_des=q_des)
                 if step%substeps==0:
                     tele=sim.telemetry
                     ground=False;maxforce=0.;penetration=0.
@@ -258,7 +265,7 @@ def simulator(args):
                         counter=tele.get('counter',-1),telemetry_age=time.time()-tele.get('wall_time',time.time()))
                     records.append(record)
                     if step%1000==0:
-                        status=dict(suspension_stiffness=suspension.stiffness,suspension_enabled=suspension.enabled,suspension_target_height=float(suspension.target[2]),physics_dt_s=dt,physics_hz=1/dt,performance=sim.performance,sim_s=float(d.time),wall_s=time.monotonic()-began,height=float(d.qpos[2]),up=float(up),gate=record['weights'].tolist(),policy_counter=record['counter'],sensor_age_s=record['sensor_age'],policy_dt_s=record['policy_interval'],motor_count=len(sim.last_raw_joint_commands),solver_iterations=int(model.opt.iterations),ls_iterations=int(model.opt.ls_iterations))
+                        status=dict(suspension_stiffness=suspension.stiffness,suspension_enabled=suspension.enabled,suspension_target_height=float(suspension.target[2]),physics_dt_s=dt,physics_hz=1/dt,performance=sim.performance,sim_s=float(d.time),wall_s=time.monotonic()-began,height=float(d.qpos[2]),up=float(up),gate=record['weights'].tolist(),policy_counter=record['counter'],sensor_age_s=record['sensor_age'],policy_dt_s=record['policy_interval'],motor_count=len(sim.last_raw_joint_commands),solver_iterations=int(model.opt.iterations),ls_iterations=int(model.opt.ls_iterations),jitter=jitter_monitor.summary())
                         if render_bridge:status.update(viewer_fps=float(render_bridge.shared[4]),render_separate_process=True)
                         (args.output/'live_status.json').write_text(json.dumps(status))
                     if viewer and not args.interactive and step%(substeps*2)==0:viewer.cam.lookat[:]=d.qpos[:3];viewer.sync()
@@ -266,7 +273,7 @@ def simulator(args):
                     render_bridge.shared[11]=float(suspension.enabled)
                     render_bridge.shared[12]=suspension.target[2]
                     render_bridge.shared[15]=suspension.stiffness
-                    render_bridge.update(d, sim.performance)
+                    render_bridge.update(d, sim.performance, jitter_monitor=jitter_monitor)
                 deadline+=dt*(render_bridge.slowdown() if args.interactive else 1.0)
                 remaining=deadline-time.monotonic()
                 if remaining>0:time.sleep(remaining)
@@ -278,6 +285,7 @@ def simulator(args):
             result.update(wall_seconds=time.monotonic()-began,sim_seconds=float(d.time),pd_feedback=args.pd_feedback,
                 compute=args.compute,command_message_counts=sim.group_count,controller_external_process=True,
                 plant=dict(dt=dt,solver=int(model.opt.solver),iterations=int(model.opt.iterations),ls_iterations=int(model.opt.ls_iterations)),
+                jitter=jitter_monitor.summary(),
                 checkpoint_sha256=meta['checkpoint_sha256'])
             (dest/'result.json').write_text(json.dumps(result,indent=2))
             print(json.dumps(result),flush=True)

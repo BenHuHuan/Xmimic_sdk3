@@ -69,6 +69,9 @@ class XMIGCSControlNode(Node):
 
         # 加载配置
         self._load_config()
+        if sim is not None:
+            self.sim = bool(sim)
+            self.config['sim'] = bool(sim)
 
         # 初始化数据结构
         self._init_data_structures()
@@ -76,6 +79,8 @@ class XMIGCSControlNode(Node):
         # 机器人接口
         self.robot_interface = get_robot_interface(self.robot_data,
                                                    self.config_file)
+        if sim is not None:
+            self.robot_interface.sim = bool(sim)
         self.robot_interface.init(self)  # 传入node实例
         # 机器人FSM
         self.robot_fsm = get_robot_fsm(
