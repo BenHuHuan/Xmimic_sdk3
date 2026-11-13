@@ -32,7 +32,7 @@ p = root / "policy/sdk_a_to"
 m = json.loads((p / "manifest.json").read_text())
 d = json.loads((p / "deploy.json").read_text())
 
-assert not c["sim"] and not c["sdk_a_autostart"] and c["dt"] == 0.01
+assert not c["sim"] and not c["sdk_a_autostart"] and c["dt"] in (0.01, 0.02)
 dex_amp_cfg = yaml.safe_load((root / "policy/dex_amp/config/dex_amp.yaml").read_text())
 assert dex_amp_cfg["dt"] == 0.01 and dex_amp_cfg["control"]["decimation"] == 2, "DEXAMP must align with Dknt0/xmigcs_dex3 (100Hz loop, decimation=2)"
 assert hashlib.sha256((p / "policy.onnx").read_bytes()).hexdigest() == m["onnx_sha256"]
@@ -183,7 +183,7 @@ for _ in range(32):
         f"Wire float32 torque exceeded effort limit: max ratio={np.max(np.abs(tau_wire_f32) / loaded_effort)}"
     )
 
-# 6. Verify FSMStateSDKA 100Hz outer loop + 50Hz TickDecimator(2) alignment
+# 6. Verify FSMStateSDKA control loop + 50Hz policy alignment
 from common.robot_data import RobotData
 from common.joystick import ControlFlag
 from policy.sdk_a_to.fsm_sdk_a import FSMStateSDKA
@@ -193,18 +193,20 @@ rd_test.config_file_ = str(root / "config/sdk_a_hardware.yaml")
 rd_test.control_dt_ = float(c["dt"])
 rd_test.q_a_s_[6:] = q_a
 fsm_sdka = FSMStateSDKA(rd_test)
-assert fsm_sdka.decimation == 2 and np.isclose(fsm_sdka.decimation * fsm_sdka.control_dt, 0.02), (
-    f"Expected 100Hz control loop + decimation=2 (50Hz policy), got control_dt={fsm_sdka.control_dt}, decimation={fsm_sdka.decimation}"
+expected_decimation = max(1, int(round(0.02 / float(c["dt"]))))
+assert fsm_sdka.decimation == expected_decimation and np.isclose(fsm_sdka.decimation * fsm_sdka.control_dt, 0.02), (
+    f"Expected control loop + decimation alignment (50Hz policy), got control_dt={fsm_sdka.control_dt}, decimation={fsm_sdka.decimation}"
 )
 flag_test = ControlFlag()
 for tick_idx in range(6):
-    # Perturb joint velocity on hold ticks to confirm 100Hz torque-limit recomputation
+    # Perturb joint velocity on hold ticks to confirm torque-limit recomputation
     rd_test.q_dot_a_s_[6:] = 0.0 if (tick_idx % 2 == 0) else 0.5
     fsm_sdka.run(flag_test)
-assert fsm_sdka.counter == 3, f"Expected 3 policy inferences across 6 ticks (50Hz in 100Hz loop), got {fsm_sdka.counter}"
+expected_counter = 6 // expected_decimation
+assert fsm_sdka.counter == expected_counter, f"Expected {expected_counter} policy inferences across 6 ticks, got {fsm_sdka.counter}"
 
 s = ort.InferenceSession(str(p / "policy.onnx"), providers=["CPUExecutionProvider"])
-print("PASS: ONNX/contract hashes; 29 joints CAN/XML kp/kd/effort aligned; 100Hz loop + 50Hz policy (decimation=2); hardware serial+parallel-ankle torque limiter verified; STOP startup.")
+print(f"PASS: ONNX/contract hashes; 29 joints CAN/XML kp/kd/effort aligned; {1.0/float(c['dt']):.0f}Hz loop + 50Hz policy (decimation={expected_decimation}); hardware serial+parallel-ankle torque limiter verified; STOP startup.")
 print("Inputs:", [(x.name, x.shape) for x in s.get_inputs()])
 print("Torque limits (Nm):", [float(x) for x in loaded_effort])
 print("IMU hardware mounting verified:", c["sdk_a"]["imu_mount_verified"])

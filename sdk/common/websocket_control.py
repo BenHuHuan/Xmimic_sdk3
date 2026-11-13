@@ -369,7 +369,7 @@ class WebsocketController:
             elif event=='terminal_ref':
                 from FSM.fsm_base import FSMStateName
                 sdka=self.fsm.state_objects.get(FSMStateName.SDK_A)
-                s=sdka.settings.get('ref_start',0);e=sdka.settings.get('ref_end',6573);rname=getattr(sdka,'ref_name',f'{s}..{e}')
+                s=sdka.settings.get('ref_start',50);e=sdka.settings.get('ref_end',240);rname=getattr(sdka,'ref_name',f'{s}..{e}')
                 reply.put(f'SDK-A reference: {rname} (frames {s}..{e}, {(e-s+1)*0.02:.2f}s loop) | Current state: {label}')
             elif event=='terminal_filter':
                 from FSM.fsm_base import FSMStateName
@@ -639,9 +639,9 @@ class WebsocketController:
         sdka = self.fsm.state_objects.get(FSMStateName.SDK_A) if self.fsm else None
         payload = {
             "state": label,
-            "ref_name": getattr(sdka, "ref_name", "FULL") if sdka else None,
-            "ref_start": sdka.settings.get("ref_start", 0) if sdka else None,
-            "ref_end": sdka.settings.get("ref_end", 6573) if sdka else None,
+            "ref_name": getattr(sdka, "ref_name", "STAND") if sdka else None,
+            "ref_start": sdka.settings.get("ref_start", 50) if sdka else None,
+            "ref_end": sdka.settings.get("ref_end", 240) if sdka else None,
             "filter_enabled": bool(getattr(sdka, "action_filter_enabled", False)) if sdka else False,
             "filter_alpha": float(getattr(sdka, "action_filter_alpha", 0.35)) if sdka else 0.35,
             "filter_cutoff_hz": sdka.action_filter_cutoff_hz() if (sdka and hasattr(sdka, "action_filter_cutoff_hz")) else None,

@@ -1,16 +1,16 @@
 {
-  "checkpoint": "/home/huan/stable_mimic/artifacts/tiangong3_fixed025_ground_ddp2_30k_20261107/model_29999.pt",
-  "checkpoint_sha256": "622bab140125d702ebf5bbf0daa9a542885ad355decc6e2bcc0c8be8e82aca60",
+  "checkpoint": "/media/huan/本地磁盘/stable_mimic/artifacts/tiangong3_sdk_A_TO17_xmimic_reg_29618_20261112/model_29618.pt",
+  "checkpoint_sha256": "fc6b2dbe99c14ce3799281f72b12fda75b2a9e8442914781392f96f0fc3be9b1",
   "scene": "assets/model29/sdk_a_scene.xml",
   "scene_sha256": "6ac7be01a4d01350d21fadedf30cbd75c7e6e8f448d0e0a9472e83fba00e9249",
   "contract": "deploy.json",
   "contract_sha256": "2c815375238d285e4c6297e3d3ef2bb0e9c64b78b9b69d133544325dad07a902",
   "reference": "reference.npz",
   "reference_sha256": "37cc55b6d7f9c55d93203421bff8f596cfda4a05600312dc3275e9ffa2b6544f",
-  "onnx_sha256": "c96ce368d2cec01cccedda4b215304b8749e98eb26793c2896cb21fa0f7321cf",
+  "onnx_sha256": "96acfc178f0918b243fc6a13017aeb42875dfbc7fa6d311f7a1fb8bdc8819906",
   "model": {
     "robot": "tiangong3_v2_29_head_fixed",
-    "iteration": 29999,
+    "iteration": 29618,
     "structure": {
       "version": 1,
       "routing": "output_blend",
@@ -39,10 +39,10 @@
       "bank": null
     }
   },
-  "onnx_parity_max_abs_error": 6.67572021484375e-06,
+  "onnx_parity_max_abs_error": 2.384185791015625e-06,
   "independent_fk_max_abs_error": 6.499109803659309e-07,
   "policy_dt": 0.02,
-  "history": "4x221; oldest first; reset backfill",
+  "history": "4x221; oldest first; reset backfill; executed_action feedback",
   "imu_mount_quat": [
     -2.5990304871330907e-06,
     -0.7075651326180634,
@@ -50,5 +50,7 @@
     2.595660486501456e-06
   ],
   "input": "pelvis quaternion wxyz, pelvis-local gyro, joint q/dq; no contact/root-height/velocity truth",
+  "hardware_safety": null,
+  "hardware_safety_onnx_verification": null,
   "hardware_validated": false
 }

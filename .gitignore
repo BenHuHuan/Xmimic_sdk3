@@ -1,9 +1,13 @@
 .venv/
+.venv-mj4/
 .vscode/
 .idea/
 output/
 vendor/
 __pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 *.pyc
 *.log
 

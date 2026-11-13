@@ -1,5 +1,5 @@
 motor_num: 29
-dt: 0.01
+dt: 0.02
 sim: false
 debug: false
 control_tool: websocket
@@ -274,6 +274,6 @@ sdk_a:
   torque_limit_scale: 1.0
   action_filter_enabled: false
   action_filter_alpha: 0.35
-  ref_name: FULL
-  ref_start: 0
-  ref_end: 6573
+  ref_name: STAND
+  ref_start: 50
+  ref_end: 240

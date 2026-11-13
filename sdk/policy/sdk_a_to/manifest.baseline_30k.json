@@ -1,0 +1,54 @@
+{
+  "checkpoint": "/home/huan/stable_mimic/artifacts/tiangong3_fixed025_ground_ddp2_30k_20261107/model_29999.pt",
+  "checkpoint_sha256": "622bab140125d702ebf5bbf0daa9a542885ad355decc6e2bcc0c8be8e82aca60",
+  "scene": "assets/model29/sdk_a_scene.xml",
+  "scene_sha256": "6ac7be01a4d01350d21fadedf30cbd75c7e6e8f448d0e0a9472e83fba00e9249",
+  "contract": "deploy.json",
+  "contract_sha256": "2c815375238d285e4c6297e3d3ef2bb0e9c64b78b9b69d133544325dad07a902",
+  "reference": "reference.npz",
+  "reference_sha256": "37cc55b6d7f9c55d93203421bff8f596cfda4a05600312dc3275e9ffa2b6544f",
+  "onnx_sha256": "c96ce368d2cec01cccedda4b215304b8749e98eb26793c2896cb21fa0f7321cf",
+  "model": {
+    "robot": "tiangong3_v2_29_head_fixed",
+    "iteration": 29999,
+    "structure": {
+      "version": 1,
+      "routing": "output_blend",
+      "controller_state": [],
+      "history": "actual_executed_action",
+      "policy_dt": 0.02,
+      "sequence_length": 24
+    },
+    "training": {
+      "variant": "A",
+      "scene": "6ac7be01a4d01350d21fadedf30cbd75c7e6e8f448d0e0a9472e83fba00e9249",
+      "contract": "2c815375238d285e4c6297e3d3ef2bb0e9c64b78b9b69d133544325dad07a902",
+      "training_compute": {
+        "timestep": 0.002,
+        "integrator": "implicitfast",
+        "solver": "newton",
+        "iterations": 10,
+        "ls_iterations": 20,
+        "tolerance": 1e-08,
+        "ls_tolerance": 0.01,
+        "ccd_iterations": 50,
+        "jacobian": "auto",
+        "decimation": 10,
+        "policy_dt": 0.02
+      },
+      "bank": null
+    }
+  },
+  "onnx_parity_max_abs_error": 6.67572021484375e-06,
+  "independent_fk_max_abs_error": 6.499109803659309e-07,
+  "policy_dt": 0.02,
+  "history": "4x221; oldest first; reset backfill",
+  "imu_mount_quat": [
+    -2.5990304871330907e-06,
+    -0.7075651326180634,
+    0.7066481324461913,
+    2.595660486501456e-06
+  ],
+  "input": "pelvis quaternion wxyz, pelvis-local gyro, joint q/dq; no contact/root-height/velocity truth",
+  "hardware_validated": false
+}
