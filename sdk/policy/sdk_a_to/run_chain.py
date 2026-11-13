@@ -174,7 +174,8 @@ def simulator(args):
     suspension=SimSuspension(float(model.body_mass.sum()))
     suspension_body=model.body('waist_pitch_link').id
     dt=float(model.opt.timestep);substeps=round(.02/dt)
-    jitter_monitor=JitterMonitor(sim.joint_names,contract['effort'],dt=dt)
+    default_qdes=np.asarray(contract['offset'],dtype=np.float64)
+    jitter_monitor=JitterMonitor(sim.joint_names,contract['effort'],dt=dt,policy_dt=.02,kp=contract.get('kp'))
     try:
         for case in cases:
             dest=args.output/case['id'];dest.mkdir(exist_ok=True)
@@ -243,7 +244,8 @@ def simulator(args):
                     d.xfrc_applied[suspension_body,:3]+=suspension.force(d.xpos[suspension_body],velocity[3:])
                 mujoco.mj_step(model,d)
                 if not np.isfinite(d.qpos).all():raise RuntimeError('Nonfinite state '+case['id'])
-                jitter_monitor.update(d.qvel[6:],d.actuator_force)
+                q_des=np.array([float(sim.last_raw_joint_commands[n]['pos']) if n in sim.last_raw_joint_commands else float(default_qdes[i]) for i,n in enumerate(sim.joint_names)],dtype=np.float64)
+                jitter_monitor.update(d.qvel[6:],d.actuator_force,q_des=q_des)
                 if step%substeps==0:
                     tele=sim.telemetry
                     ground=False;maxforce=0.;penetration=0.

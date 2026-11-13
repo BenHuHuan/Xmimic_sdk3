@@ -134,8 +134,9 @@ def main():
     fig.linewidth=2.0
     fig.figurergba=[0.06,0.06,0.08,0.72]
     fig.panergba=[0.02,0.02,0.04,0.65]
+    fig.flg_extend=0
     fig.range[0]=[0.0,150.0]
-    fig.range[1]=[0.0,110.0]
+    fig.range[1]=[0.0,105.0]
     fig_n=150
     hist_jitter=np.zeros(fig_n,dtype=np.float32)
     hist_twitch=np.zeros(fig_n,dtype=np.float32)
@@ -241,14 +242,14 @@ def main():
                 for j,geoms in enumerate(joint_geom_ids):
                     if not geoms:continue
                     sev=float(j_sev[j])
-                    if sev>=0.55:
+                    if sev>=0.75:
                         col=np.array([1.0,0.10+0.35*pulse_fast,0.06,1.0],dtype=np.float32)
                         blend=0.72+0.28*pulse_fast
                         for g in geoms:
                             model.geom_rgba[g]=(1.0-blend)*base_geom_rgba[g]+blend*col
-                    elif sev>=0.20:
+                    elif sev>=0.55:
                         col=np.array([1.0,0.82,0.08,1.0],dtype=np.float32)
-                        blend=min(0.85,max(0.25,(sev-0.20)/0.35*(0.55+0.30*pulse_warn)))
+                        blend=min(0.75,max(0.25,(sev-0.55)/0.20*(0.50+0.25*pulse_warn)))
                         for g in geoms:
                             model.geom_rgba[g]=(1.0-blend)*base_geom_rgba[g]+blend*col
                 data.xfrc_applied[:]=0
@@ -267,13 +268,13 @@ def main():
                 p_name=joint_names[p_idx] if joint_names else 'none'
                 peak_sev=max(j_score,t_score)
                 j_pct=min(100.0,j_score*100.0);t_pct=min(100.0,t_score*100.0)
-                if peak_sev>=0.55:
-                    banner_title='!! CRITICAL: HF JITTER / TWITCH !!'
-                    banner_body=f'PEAK: {p_name} ({p_freq:.1f} Hz) | Jitter {j_pct:.0f}% | Twitch {t_pct:.0f}% | Joints {act_n}'
+                if peak_sev>=0.75:
+                    banner_title='!! FATAL HARDWARE RISK: HF JITTER / SHOCK !!'
+                    banner_body=f'PEAK: {p_name} ({p_freq:.1f} Hz) | Chatter {j_pct:.0f}% | Shock {t_pct:.0f}% | Crit Joints {act_n}'
                     banner_scale=int(mujoco.mjtFontScale.mjFONTSCALE_150)
-                elif peak_sev>=0.25:
-                    banner_title='! WARN: JITTER / TWITCH DETECTED !'
-                    banner_body=f'PEAK: {p_name} ({p_freq:.1f} Hz) | Jitter {j_pct:.0f}% | Twitch {t_pct:.0f}% | Joints {act_n}'
+                elif peak_sev>=0.55:
+                    banner_title='! HIGH LOAD / IMPACT WARNING !'
+                    banner_body=f'PEAK: {p_name} ({p_freq:.1f} Hz) | Chatter {j_pct:.0f}% | Shock {t_pct:.0f}%'
                     banner_scale=int(mujoco.mjtFontScale.mjFONTSCALE_150)
                 else:
                     banner_title='JITTER MONITOR'
