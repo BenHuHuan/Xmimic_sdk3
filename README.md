@@ -120,7 +120,7 @@ Case-insensitive commands accepted in both simulation and onboard/offboard termi
 | `./xrobot3 deploy --host USER@ROBOT` | Sync workspace via `rsync` (with progress/ETA) and run `install.sh` remotely |
 | `./xrobot3 body --host USER@ROBOT [--stop]` | Start or stop onboard `body_control` driver |
 | `./xrobot3 interfaces` | List local IPv4 interfaces for DDS selection |
-| `./xrobot3 sync` | Fetch `origin/main`, fast-forward `main`, and merge updates into the current branch (`--rebase` / `--dry-run`) |
+| `./xrobot3 sync` | Auto-update SDK files to the latest `main` release with progress bar (works with or without `.git`; `--reinstall` / `--tarball` / `--dry-run`) |
 | `./xrobot3 check` | Verify Python env, ROS 2 messages, and ONNX / `deploy.json` contracts |
 
 ---
