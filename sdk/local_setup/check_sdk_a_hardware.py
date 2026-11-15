@@ -34,7 +34,7 @@ d = json.loads((p / "deploy.json").read_text())
 
 assert not c["sim"] and not c["sdk_a_autostart"] and c["dt"] in (0.01, 0.02)
 dex_amp_cfg = yaml.safe_load((root / "policy/dex_amp/config/dex_amp.yaml").read_text())
-assert dex_amp_cfg["dt"] == 0.01 and dex_amp_cfg["control"]["decimation"] == 2, "DEXAMP must align with Dknt0/xmigcs_dex3 (100Hz loop, decimation=2)"
+assert dex_amp_cfg["dt"] == c["dt"] and abs(dex_amp_cfg["dt"] * dex_amp_cfg["control"]["decimation"] - 0.02) < 1e-9, "DEXAMP policy rate must be 50Hz and match main control-loop dt"
 assert hashlib.sha256((p / "policy.onnx").read_bytes()).hexdigest() == m["onnx_sha256"]
 assert hashlib.sha256((p / "deploy.json").read_bytes()).hexdigest() == m["contract_sha256"]
 assert all(len(d[k]) == 29 for k in ["joint_names", "kp", "kd", "effort", "offset", "scale"])
