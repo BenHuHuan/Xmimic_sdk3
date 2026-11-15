@@ -2,6 +2,7 @@
 .venv-mj4/
 .vscode/
 .idea/
+.claude/
 output/
 vendor/
 __pycache__/
