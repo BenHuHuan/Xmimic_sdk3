@@ -112,7 +112,59 @@ for name in ['upload','deploy','remote','body']:
   q.add_argument('--stop',action='store_true',help='Stop running body_control process')
 sub.add_parser('check',help='Verify Python environment, ROS 2 messages, and ONNX/deploy contracts')
 sub.add_parser('interfaces',help='List local IPv4 interfaces for wired/wireless DDS')
+sy=sub.add_parser('sync',help='Fetch and merge updates from git main into the current branch')
+sy.add_argument('--remote',default='origin',help='Git remote name (default: origin)')
+sy.add_argument('--branch',default='main',help='Source branch to sync from (default: main)')
+sy.add_argument('--rebase',action='store_true',help='Rebase current branch onto remote/branch instead of merge')
+sy.add_argument('--dry-run',action='store_true',help='Print git commands without modifying the repository')
 a=p.parse_args()
+if a.cmd=='sync':
+ def _git(*args,check=True,capture=False):
+  return subprocess.run(['git','-C',str(ROOT),*args],check=check,text=True,capture_output=capture)
+ def _run_or_show(args):
+  if a.dry_run:print('Command:',shlex.join(['git','-C',str(ROOT),*args]))
+  else:_git(*args)
+ if _git('rev-parse','--is-inside-work-tree',check=False,capture=True).returncode!=0:p.error('Not a git repository')
+ cur=_git('branch','--show-current',capture=True).stdout.strip() or 'HEAD'
+ ref=f'{a.remote}/{a.branch}'
+ _run_or_show(['fetch',a.remote,a.branch])
+ if a.dry_run:
+  if cur!=a.branch:_run_or_show(['branch','-f',a.branch,ref])
+  _run_or_show(['rebase',ref] if a.rebase else ['merge','--no-edit',ref])
+  sys.exit()
+ behind=int(_git('rev-list','--count',f'HEAD..{ref}',capture=True).stdout.strip() or '0')
+ if cur!=a.branch:
+  # Fast-forward local main ref if it exists and has not diverged
+  local_main=_git('show-ref','--verify',f'refs/heads/{a.branch}',check=False,capture=True).returncode==0
+  if local_main and _git('merge-base','--is-ancestor',a.branch,ref,check=False).returncode==0:
+   _git('branch','-f',a.branch,ref)
+ if behind==0:
+  print(f'Already up to date on {cur} ({ref} has no new commits).')
+  sys.exit()
+ dirty=bool(_git('status','--porcelain','--untracked-files=no',capture=True).stdout.strip())
+ stashed=False
+ if dirty:
+  print('Stashing local tracked changes before sync...')
+  _git('stash','push','-m','xrobot3-sync-autostash')
+  stashed=True
+ try:
+  if cur==a.branch and not a.rebase:
+   _git('merge','--ff-only',ref)
+  elif a.rebase:
+   _git('rebase',ref)
+  else:
+   _git('merge','--no-edit',ref)
+ except subprocess.CalledProcessError:
+  print(f'Sync hit a conflict while applying {ref} onto {cur}. Resolve conflicts, then continue.',file=sys.stderr)
+  if stashed:print('Note: your local changes were saved in git stash ("xrobot3-sync-autostash"); run `git stash pop` after resolving.',file=sys.stderr)
+  sys.exit(1)
+ if stashed:
+  pop=_git('stash','pop',check=False)
+  if pop.returncode!=0:
+   print('Synced with upstream, but `git stash pop` had conflicts. Resolve manually.',file=sys.stderr)
+   sys.exit(pop.returncode)
+ print(f'Synced {cur} with {ref} ({behind} new commit(s)).')
+ sys.exit()
 if a.cmd=='interfaces':
  for item in interfaces():print(item['name'],item['kind'],', '.join(item['addresses']) or '(no IPv4)')
  sys.exit()

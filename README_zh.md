@@ -120,6 +120,7 @@ bash scripts/setup_mujoco4_dev.sh
 | `./xrobot3 deploy --host USER@ROBOT` | 通过 `rsync`（带进度条/ETA）同步代码并远程执行 `install.sh` |
 | `./xrobot3 body --host USER@ROBOT [--stop]` | 远程启动或停止机载 `body_control` 驱动 |
 | `./xrobot3 interfaces` | 列出本机可用于 DDS 通信的 IPv4 网卡 |
+| `./xrobot3 sync` | 自动拉取 `origin/main` 更新并同步合入当前分支（支持 `--rebase`、`--dry-run`，自动 stash 保护本地改动） |
 | `./xrobot3 check` | 校验 Python 环境、ROS 2 消息包及 ONNX / `deploy.json` 契约 |
 
 ---
