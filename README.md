@@ -120,6 +120,7 @@ Case-insensitive commands accepted in both simulation and onboard/offboard termi
 | `./xrobot3 deploy --host USER@ROBOT` | Sync workspace via `rsync` (with progress/ETA) and run `install.sh` remotely |
 | `./xrobot3 body --host USER@ROBOT [--stop]` | Start or stop onboard `body_control` driver |
 | `./xrobot3 interfaces` | List local IPv4 interfaces for DDS selection |
+| `./xrobot3 sync` | Auto-update SDK files to the latest `main` release with progress bar (works with or without `.git`; `--reinstall` / `--tarball` / `--dry-run`) |
 | `./xrobot3 check` | Verify Python env, ROS 2 messages, and ONNX / `deploy.json` contracts |
 
 ---
@@ -153,10 +154,21 @@ Xrobot3/
 
 ## Verification & Safety Notes
 
-- Offline FSM & terminal transition check:
-  ```bash
-  source env.sh && python scripts/check_onboard_terminal.py
-  ```
+Recommended pre-release verification suite:
+
+```bash
+# 1. Environment, 29-DoF ONNX/deploy contract & MuJoCo 4.0.0 model check
+./xrobot3 check
+
+# 2. Offline 25-transition FSM, WALK/VEL, FILTER/REF & HANG-exclusion check
+source env.sh && python scripts/check_onboard_terminal.py
+
+# 3. SDK auto-updater & MuJoCo 4.0 / 3.3.7 simulation smoke tests
+./xrobot3 sync
+./xrobot3 run --interface lo --headless --seconds 5
+./xrobot3 run --interface lo --physics 3.3.7 --headless --seconds 4
+```
+
 - Runtime logs and per-run summaries (including `"jitter"` metrics) are saved under `output/`.
 - **Simulation testing is not hardware validation.** Always verify joint feedback frames, DDS domain, network interface, and actuator limits (`sdk/policy/sdk_a_to/deploy.json`) before running on physical hardware.
 - Third-party upstream sources and pinned commits are documented in [UPSTREAM.json](UPSTREAM.json).

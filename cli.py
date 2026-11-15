@@ -87,6 +87,167 @@ def run_rsync_with_progress(rsync_base):
   msg=render(100.0,final_bytes,avg,_fmt_time(elapsed),final_files,done=True)
  if tty:sys.stdout.write('\r'+msg+'\033[K\n');sys.stdout.flush()
  else:print(msg,flush=True)
+def _render_bar(label,pct,detail,done=False):
+ tty=sys.stdout.isatty()
+ fill_ch,empty_ch=('█','░') if 'utf' in (sys.stdout.encoding or '').lower() else ('#','-')
+ cols=shutil.get_terminal_size((100,20)).columns or 100
+ prefix=f'{label} ['
+ suffix=f'] {pct:5.1f}%  {detail}'
+ bw=min(28,max(8,cols-len(prefix)-len(suffix)-1)) if tty else 24
+ filled=min(bw,max(0,int(round(bw*pct/100.0))))
+ line=prefix+fill_ch*filled+empty_ch*(bw-filled)+suffix
+ if tty:
+  line=line[:max(1,cols-1)]
+  sys.stdout.write('\r'+line+'\033[K'+('\n' if done else ''));sys.stdout.flush()
+ elif done:
+  print(line,flush=True)
+
+def _maybe_notify_sdk_update(repo='BenHuHuan/Xmimic_sdk3',branch='main'):
+ """Non-blocking 24h-cached update reminder so users don't miss new SDK features."""
+ import urllib.request
+ state_file=ROOT/'output'/'.sdk_update_check.json'
+ now=time.time()
+ try:
+  if state_file.exists():
+   cached=json.loads(state_file.read_text())
+   if now-float(cached.get('checked_at',0))<86400:
+    if cached.get('update_available') and cached.get('remote_sha'):
+     print(f"[xrobot3] SDK update available on {branch} ({cached['remote_sha'][:7]}). Run './xrobot3 sync' to update.",flush=True)
+    return
+ except Exception:pass
+ update_avail=False;remote_sha=''
+ try:
+  req=urllib.request.Request(f'https://api.github.com/repos/{repo}/commits/{branch}',headers={'Accept':'application/vnd.github.sha','User-Agent':'xrobot3-cli'})
+  with urllib.request.urlopen(req,timeout=0.8) as resp:
+   remote_sha=resp.read().decode('utf-8','ignore').strip().strip('"')
+  if remote_sha:
+   if (ROOT/'.git').exists():
+    head=subprocess.run(['git','-C',str(ROOT),'rev-parse','HEAD'],capture_output=True,text=True,timeout=1)
+    if head.returncode==0:
+     anc=subprocess.run(['git','-C',str(ROOT),'merge-base','--is-ancestor',remote_sha,'HEAD'],capture_output=True,timeout=1)
+     update_avail=anc.returncode!=0
+   else:
+    sync_state=ROOT/'output'/'.sdk_sync_state.json'
+    cur_sha=json.loads(sync_state.read_text()).get('sha','') if sync_state.exists() else ''
+    update_avail=bool(cur_sha and cur_sha!=remote_sha)
+ except Exception:return
+ try:
+  state_file.parent.mkdir(parents=True,exist_ok=True)
+  state_file.write_text(json.dumps({'checked_at':now,'remote_sha':remote_sha,'update_available':update_avail}))
+ except Exception:pass
+ if update_avail and remote_sha:
+  print(f"[xrobot3] SDK update available on {branch} ({remote_sha[:7]}). Run './xrobot3 sync' to update.",flush=True)
+
+def run_sdk_sync(remote='origin',branch='main',repo='BenHuHuan/Xmimic_sdk3',reinstall=False,tarball=False,dry_run=False):
+ """Auto-update SDK files from the latest main release with progress bars."""
+ import tarfile,tempfile,urllib.request
+ use_git=(ROOT/'.git').exists() and not tarball
+ if dry_run:
+  if use_git:
+   print('Plan (git):',shlex.join(['git','-C',str(ROOT),'fetch',remote,branch]),'->',shlex.join(['git','-C',str(ROOT),'merge','--no-edit',f'{remote}/{branch}']))
+  else:
+   print(f'Plan (archive): download https://github.com/{repo}/archive/refs/heads/{branch}.tar.gz -> sync files into {ROOT}')
+  return
+ deps_before={f:(ROOT/f).read_bytes() for f in ('requirements.txt','install.sh') if (ROOT/f).exists()}
+ if use_git:
+  def _git(*args,check=True):
+   return subprocess.run(['git','-C',str(ROOT),*args],check=check,text=True,capture_output=True)
+  _render_bar('Checking SDK',15.0,f'fetching {remote}/{branch}...')
+  cur=_git('branch','--show-current').stdout.strip() or 'HEAD'
+  ref=f'{remote}/{branch}'
+  _git('fetch',remote,branch)
+  _render_bar('Checking SDK',60.0,f'comparing {cur} vs {ref}...')
+  if cur!=branch and _git('show-ref','--verify',f'refs/heads/{branch}',check=False).returncode==0:
+   if _git('merge-base','--is-ancestor',branch,ref,check=False).returncode==0:
+    _git('branch','-f',branch,ref)
+  behind=int(_git('rev-list','--count',f'HEAD..{ref}').stdout.strip() or '0')
+  short_sha=_git('rev-parse','--short',ref).stdout.strip()
+  if behind==0:
+   _render_bar('SDK Sync',100.0,f'already up to date ({branch} @ {short_sha})',done=True)
+  else:
+   changed=[x for x in _git('diff','--name-only',f'HEAD..{ref}').stdout.splitlines() if x.strip()]
+   dirty=bool(_git('status','--porcelain','--untracked-files=no').stdout.strip())
+   stashed=False
+   if dirty:
+    _render_bar('Updating SDK',20.0,'stashing local changes...')
+    _git('stash','push','-m','xrobot3-sync-autostash')
+    stashed=True
+   try:
+    _render_bar('Updating SDK',45.0,f'applying {behind} commit(s) ({len(changed)} files)...')
+    _git('merge','--ff-only',ref) if cur==branch else _git('merge','--no-edit',ref)
+   except subprocess.CalledProcessError:
+    print(f'\nSync hit a merge conflict with {ref}. Resolve conflicts manually.',file=sys.stderr)
+    if stashed:print('Local edits saved in git stash ("xrobot3-sync-autostash"); run `git stash pop` after resolving.',file=sys.stderr)
+    sys.exit(1)
+   if stashed and _git('stash','pop',check=False).returncode!=0:
+    print('\nSDK updated, but `git stash pop` had conflicts. Resolve manually.',file=sys.stderr)
+    sys.exit(1)
+   total=max(1,len(changed))
+   for i,rel in enumerate(changed,1):
+    if i==total or i%5==0:
+     _render_bar('Updating SDK',45.0+55.0*(i/total),f'{i}/{total} files ({rel[:28]})',done=(i==total))
+   if not changed:
+    _render_bar('Updating SDK',100.0,f'synced {behind} commit(s) @ {short_sha}',done=True)
+   print(f'SDK updated: {cur} synced with {ref} ({behind} new commit(s), @ {short_sha}).')
+ else:
+  _render_bar('Checking SDK',10.0,f'querying {repo}@{branch}...')
+  remote_sha=''
+  try:
+   req=urllib.request.Request(f'https://api.github.com/repos/{repo}/commits/{branch}',headers={'Accept':'application/vnd.github.sha','User-Agent':'xrobot3-cli'})
+   with urllib.request.urlopen(req,timeout=5) as resp:
+    remote_sha=resp.read().decode('utf-8','ignore').strip().strip('"')
+  except Exception:pass
+  sync_state=ROOT/'output'/'.sdk_sync_state.json'
+  if remote_sha and not reinstall and sync_state.exists():
+   try:
+    if json.loads(sync_state.read_text()).get('sha')==remote_sha:
+     _render_bar('SDK Sync',100.0,f'already up to date ({branch} @ {remote_sha[:7]})',done=True)
+     return
+   except Exception:pass
+  url=f'https://github.com/{repo}/archive/refs/heads/{branch}.tar.gz'
+  req=urllib.request.Request(url,headers={'User-Agent':'xrobot3-cli'})
+  t0=time.monotonic()
+  with tempfile.TemporaryDirectory(prefix='xrobot3_sync_') as tmp:
+   tgz=Path(tmp)/'sdk.tar.gz'
+   with urllib.request.urlopen(req,timeout=30) as resp,tgz.open('wb') as out_f:
+    total_b=int(resp.headers.get('Content-Length') or 0)
+    done_b=0
+    while True:
+     chunk=resp.read(65536)
+     if not chunk:break
+     out_f.write(chunk);done_b+=len(chunk)
+     dt=max(0.05,time.monotonic()-t0);rate=done_b/dt
+     pct=(min(100.0,done_b*100.0/total_b) if total_b>0 else min(95.0,done_b/2e6*10.0))
+     detail=(f'{_fmt_bytes(done_b)}/{_fmt_bytes(total_b)}  {_fmt_bytes(rate)}/s' if total_b>0 else f'{_fmt_bytes(done_b)}  {_fmt_bytes(rate)}/s')
+     _render_bar('Downloading',pct,detail)
+   _render_bar('Downloading',100.0,f'{_fmt_bytes(done_b)}  {_fmt_time(time.monotonic()-t0)}',done=True)
+   with tarfile.open(tgz,'r:gz') as tf:
+    tf.extractall(tmp)
+   roots=[p for p in Path(tmp).iterdir() if p.is_dir()]
+   if not roots:raise RuntimeError('Empty SDK archive')
+   src_root=roots[0]
+   skip={'.git','.venv','.venv-mj4','output','vendor','.vscode','.idea','.claude','__pycache__'}
+   files=[f for f in src_root.rglob('*') if f.is_file() and not any(part in skip for part in f.relative_to(src_root).parts)]
+   total_f=max(1,len(files))
+   for i,src in enumerate(files,1):
+    rel=src.relative_to(src_root)
+    dst=ROOT/rel
+    dst.parent.mkdir(parents=True,exist_ok=True)
+    shutil.copy2(src,dst)
+    if i==total_f or i%10==0:
+     _render_bar('Updating SDK',i*100.0/total_f,f'{i}/{total_f} files',done=(i==total_f))
+  sync_state.parent.mkdir(parents=True,exist_ok=True)
+  sync_state.write_text(json.dumps({'sha':remote_sha,'branch':branch,'updated_at':time.time()}))
+  print(f'SDK updated from {repo}@{branch}'+(f' ({remote_sha[:7]})' if remote_sha else '')+'.')
+ try:
+  chk=ROOT/'output'/'.sdk_update_check.json'
+  if chk.exists():chk.unlink()
+ except Exception:pass
+ deps_after={f:(ROOT/f).read_bytes() for f in ('requirements.txt','install.sh') if (ROOT/f).exists()}
+ if reinstall or deps_before!=deps_after:
+  print('Dependencies changed; refreshing environment via install.sh...')
+  subprocess.run(['bash',str(ROOT/'install.sh')],cwd=str(ROOT),check=True)
+
 def gpu_render_check():
  """Warn when the NVIDIA GPU is power/thermal-capped; the viewer then drops to a few FPS."""
  try:
@@ -112,7 +273,17 @@ for name in ['upload','deploy','remote','body']:
   q.add_argument('--stop',action='store_true',help='Stop running body_control process')
 sub.add_parser('check',help='Verify Python environment, ROS 2 messages, and ONNX/deploy contracts')
 sub.add_parser('interfaces',help='List local IPv4 interfaces for wired/wireless DDS')
+sy=sub.add_parser('sync',help='Auto-update SDK files to the latest main release with progress bar')
+sy.add_argument('--remote',default='origin',help='Git remote name when in a git checkout (default: origin)')
+sy.add_argument('--branch',default='main',help='Source branch to update from (default: main)')
+sy.add_argument('--repo',default='BenHuHuan/Xmimic_sdk3',help='GitHub owner/repo for archive updates (default: BenHuHuan/Xmimic_sdk3)')
+sy.add_argument('--reinstall',action='store_true',help='Re-run install.sh after updating SDK files')
+sy.add_argument('--tarball',action='store_true',help='Force downloading release archive instead of using git')
+sy.add_argument('--dry-run',action='store_true',help='Print update plan without modifying files')
 a=p.parse_args()
+if a.cmd=='sync':
+ run_sdk_sync(remote=a.remote,branch=a.branch,repo=a.repo,reinstall=a.reinstall,tarball=a.tarball,dry_run=a.dry_run)
+ sys.exit()
 if a.cmd=='interfaces':
  for item in interfaces():print(item['name'],item['kind'],', '.join(item['addresses']) or '(no IPv4)')
  sys.exit()
@@ -155,6 +326,7 @@ if a.cmd in ('upload','deploy','remote','body') or (a.cmd=='run' and a.host):
   else:subprocess.run(ssh_command,check=True)
  sys.exit()
 if a.cmd=='check':
+ _maybe_notify_sdk_update()
  subprocess.run([sys.executable,str(ROOT/'sdk/local_setup/check_sdk_a_hardware.py')],check=True)
  mj4_py=ROOT/'.venv-mj4/bin/python'
  sim_py=str(mj4_py) if os.access(mj4_py,os.X_OK) else sys.executable
@@ -205,6 +377,7 @@ if a.interface:
 print('Endpoint:',a.target,'interface:',a.interface,'peer:',a.robot_ip,'| FSM: STOP / ZERO / FIX / SDK-A / WALK',flush=True)
 if a.dry_run:print('Command:',shlex.join(command),'domain:',env['ROS_DOMAIN_ID'],flush=True)
 if not a.dry_run:
+ _maybe_notify_sdk_update()
  # Preserve one dedicated console descriptor; ROS/native/Python logs go to disk.
  console_fd=os.dup(sys.stdout.fileno());os.set_inheritable(console_fd,True)
  env['TG_CONSOLE_FD']=str(console_fd)

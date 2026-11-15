@@ -45,7 +45,7 @@ assert 'Not executed' in execute('VEL 0.3 0')
 assert fsm.get_current_state().name=='FIX'
 execute('SDK-A')
 sdka_obj=fsm.state_objects[fsm.get_current_state()]
-assert sdka_obj.ref_name=='FULL' and sdka_obj.settings.get('ref_start')==0 and sdka_obj.settings.get('ref_end')==6573
+assert sdka_obj.ref_name=='STAND' and sdka_obj.settings.get('ref_start')==50 and sdka_obj.settings.get('ref_end')==240
 assert 'DANCE (frames 250..430' in execute('REF DANCE')
 assert '304..430 (frames 304..430' in execute('REF 304 430')
 assert 'STAND (frames 50..240' in execute('REF STAND')

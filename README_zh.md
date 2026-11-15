@@ -120,6 +120,7 @@ bash scripts/setup_mujoco4_dev.sh
 | `./xrobot3 deploy --host USER@ROBOT` | 通过 `rsync`（带进度条/ETA）同步代码并远程执行 `install.sh` |
 | `./xrobot3 body --host USER@ROBOT [--stop]` | 远程启动或停止机载 `body_control` 驱动 |
 | `./xrobot3 interfaces` | 列出本机可用于 DDS 通信的 IPv4 网卡 |
+| `./xrobot3 sync` | 带进度条自动更新最新 `main` 版 SDK 文件（支持有/无 `.git` 部署机环境，可选 `--reinstall` / `--tarball` / `--dry-run`） |
 | `./xrobot3 check` | 校验 Python 环境、ROS 2 消息包及 ONNX / `deploy.json` 契约 |
 
 ---
@@ -153,10 +154,21 @@ Xrobot3/
 
 ## 验证与安全提示
 
-- 离线状态机与终端指令切换自检：
-  ```bash
-  source env.sh && python scripts/check_onboard_terminal.py
-  ```
+推荐的发布前验证流程：
+
+```bash
+# 1. 环境、29 自由度 ONNX/deploy 契约与 MuJoCo 4.0.0 模型校验
+./xrobot3 check
+
+# 2. 离线 25 态切换、WALK/VEL、FILTER/REF 与 HANG 硬件隔离校验
+source env.sh && python scripts/check_onboard_terminal.py
+
+# 3. SDK 自动更新与 MuJoCo 4.0 / 3.3.7 仿真冒烟测试
+./xrobot3 sync
+./xrobot3 run --interface lo --headless --seconds 5
+./xrobot3 run --interface lo --physics 3.3.7 --headless --seconds 4
+```
+
 - 每次运行的详细日志与抖动统计（`"jitter"` 字段）保存在 `output/` 目录下。
 - **仿真通过不等于真机安全**：上真机前务必核对关节反馈坐标系、DDS Domain、网卡配置以及 [deploy.json](sdk/policy/sdk_a_to/deploy.json) 中的力矩限幅参数。
 - 第三方上游仓库与锁定 Commit 见 [UPSTREAM.json](UPSTREAM.json)。
