@@ -120,7 +120,7 @@ bash scripts/setup_mujoco4_dev.sh
 | 抬升 / 下降机器人 | `↑` / `↓`（亦支持 `PageUp`/`PageDown`、`7`/`8`、小键盘 `7`/`9` 与 `1`/`3`） | 每次按键调整目标悬吊高度 `±0.05 m` |
 | 一键释放吊绳 | `F10` / `0` / `Delete` | 单次按键立即关闭吊绳支撑（`RELEASED (OFF)`） |
 | 切换启用 / 释放 | `H` / 小键盘 `0` / 小键盘 `5` | 在 `ENABLED` 与 `RELEASED (OFF)` 间切换 |
-| 增强 / 减弱刚度 | `=` / `KP+`（`KP8`/`KP6`）与 `-` / `KP-`（`KP2`/`KP4`） | 调节弹簧刚度（`N/m`），降至 `65 N/m` 以下自动释放 |
+| 增强 / 减弱刚度 | `.` / `KP+`（`KP8`/`KP6`）与 `,` / `KP-`（`KP2`/`KP4`） | 调节弹簧刚度（`N/m`），降至 `65 N/m` 以下自动释放（`-`/`=` 保留给 MuJoCo 调速） |
 
 - **窗口状态提示：** 仿真窗口左上角 HUD 实时显示 `Suspension: ENABLED (z=...m, k=...N/m)`（已启用）或 `RELEASED (OFF)`（已释放），并持续提示 `Sling keys (focus window)` 快捷键及窗口焦点要求。
 

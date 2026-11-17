@@ -68,7 +68,7 @@ def start_state_terminal(controller):
             commands+=' / HANG ON|OFF|UP|DOWN|STRONGER|WEAKER'
         print(commands,file=ui,flush=True)
         if has_sim_fix:
-            print('Viewer sling hotkeys (click MuJoCo window to focus): F9/9=hang, Up/Down=lift/lower, F10/0/Del=release, =/-=stiffness',file=ui,flush=True)
+            print('Viewer sling hotkeys (click MuJoCo window to focus): F9/9=hang, Up/Down=lift/lower, F10/0/Del=release, ./,=stiffness',file=ui,flush=True)
         while True:
             if sys.stdin.isatty():
                 ui.write('xrobot3> ');ui.flush()

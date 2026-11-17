@@ -28,8 +28,9 @@ for k in (glfw.KEY_F9, glfw.KEY_INSERT, glfw.KEY_9):
     assert HANG_KEYS[k] == 'ON', k
 for k in (glfw.KEY_KP_0, glfw.KEY_KP_5, glfw.KEY_H):
     assert HANG_KEYS[k] == 'TOGGLE', k
-assert HANG_KEYS[glfw.KEY_EQUAL] == 'STRONGER' and HANG_KEYS[glfw.KEY_MINUS] == 'WEAKER'
+assert HANG_KEYS[glfw.KEY_PERIOD] == 'STRONGER' and HANG_KEYS[glfw.KEY_COMMA] == 'WEAKER'
 assert glfw.KEY_LEFT not in HANG_KEYS and glfw.KEY_RIGHT not in HANG_KEYS
+assert glfw.KEY_EQUAL not in HANG_KEYS and glfw.KEY_MINUS not in HANG_KEYS
 
 # 2. Verify SimSuspension lift/lower/release/stiffness-restore against the real MuJoCo model.
 model = mujoco.MjModel.from_xml_path(str(ROOT / 'sdk/policy/sdk_a_to/scene_unitree_visual.xml'))
@@ -68,7 +69,7 @@ for release_key in (glfw.KEY_F10, glfw.KEY_0, glfw.KEY_DELETE):
 # Weakening to auto-off and then re-enabling via Up restores usable stiffness.
 susp.command('ON', data.xpos[waist_id])
 while susp.enabled:
-    susp.command(HANG_KEYS[glfw.KEY_MINUS], data.xpos[waist_id])
+    susp.command(HANG_KEYS[glfw.KEY_COMMA], data.xpos[waist_id])
 assert not susp.enabled and susp.stiffness <= 65.0
 susp.command(HANG_KEYS[glfw.KEY_UP], data.xpos[waist_id])
 assert susp.enabled and susp.stiffness == 1000.0

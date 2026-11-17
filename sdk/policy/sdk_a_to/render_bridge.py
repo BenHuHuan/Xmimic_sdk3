@@ -5,7 +5,7 @@ import mujoco
 import numpy as np
 from glfw import (
     KEY_F9, KEY_F10, KEY_INSERT, KEY_DELETE, KEY_UP, KEY_DOWN,
-    KEY_PAGE_UP, KEY_PAGE_DOWN, KEY_EQUAL, KEY_MINUS,
+    KEY_PAGE_UP, KEY_PAGE_DOWN, KEY_COMMA, KEY_PERIOD,
     KEY_0, KEY_7, KEY_8, KEY_9, KEY_H,
     KEY_KP_0, KEY_KP_1, KEY_KP_2, KEY_KP_3, KEY_KP_4,
     KEY_KP_5, KEY_KP_6, KEY_KP_7, KEY_KP_8, KEY_KP_9,
@@ -13,15 +13,15 @@ from glfw import (
 )
 
 # Viewer-window hotkeys require keyboard focus on the MuJoCo viewer window.
-# Avoid KEY_LEFT/KEY_RIGHT because MuJoCo Simulate binds them to pause/history step.
+# Avoid KEY_LEFT/KEY_RIGHT (pause/history) and KEY_EQUAL/KEY_MINUS (sim speed).
 HANG_KEYS={
     KEY_F9:'ON', KEY_INSERT:'ON', KEY_9:'ON',
     KEY_F10:'OFF', KEY_DELETE:'OFF', KEY_0:'OFF',
     KEY_KP_0:'TOGGLE', KEY_KP_5:'TOGGLE', KEY_H:'TOGGLE',
     KEY_UP:'UP', KEY_7:'UP', KEY_KP_7:'UP', KEY_KP_9:'UP', KEY_PAGE_UP:'UP',
     KEY_DOWN:'DOWN', KEY_8:'DOWN', KEY_KP_1:'DOWN', KEY_KP_3:'DOWN', KEY_PAGE_DOWN:'DOWN',
-    KEY_EQUAL:'STRONGER', KEY_KP_ADD:'STRONGER', KEY_KP_8:'STRONGER', KEY_KP_6:'STRONGER',
-    KEY_MINUS:'WEAKER', KEY_KP_SUBTRACT:'WEAKER', KEY_KP_2:'WEAKER', KEY_KP_4:'WEAKER',
+    KEY_PERIOD:'STRONGER', KEY_KP_ADD:'STRONGER', KEY_KP_8:'STRONGER', KEY_KP_6:'STRONGER',
+    KEY_COMMA:'WEAKER', KEY_KP_SUBTRACT:'WEAKER', KEY_KP_2:'WEAKER', KEY_KP_4:'WEAKER',
 }
 
 def format_suspension_hud(enabled,target_z,stiffness):
@@ -29,7 +29,7 @@ def format_suspension_hud(enabled,target_z,stiffness):
     if enabled:
         return (
             f'ENABLED (z={target_z:.2f}m, k={stiffness:.0f}N/m)',
-            'Up/Down: lift/lower | F10/0/Del: release | =/-: stiffness',
+            'Up/Down: lift/lower | F10/0/Del: release | ./,: stiffness',
         )
     return (
         'RELEASED (OFF)',
@@ -161,10 +161,7 @@ def main():
     default_qvel=model.key_qvel[0].copy() if model.nkey>0 else np.zeros(nv)
     while a[5]==0 and a[0]:time.sleep(.01)
     keys=socket.socket(socket.AF_UNIX,socket.SOCK_DGRAM)
-    rt_state={'idx':0,'lock_until':0.0}
     def key_callback(key):
-        if key in (KEY_MINUS,KEY_EQUAL):
-            rt_state['lock_until']=time.monotonic()+0.1
         command=HANG_KEYS.get(key)
         if command:
             try:keys.sendto(command.encode('ascii'),str(path.parent/'viewer_keys.sock'))
@@ -219,13 +216,9 @@ def main():
             with sim.lock():
                 if data.xfrc_applied[0,0]==0.0:
                     rendered_frames+=1;frames+=1
-                if now<rt_state['lock_until']:
-                    sim.real_time_index=rt_state['idx']
-                else:
-                    rt_state['idx']=int(sim.real_time_index)
                 running=bool(sim.run)
                 a[13]=1.0 if running else 0.0
-                idx=min(max(rt_state['idx'],0),len(mujoco.viewer.PERCENT_REALTIME)-1)
+                idx=min(max(int(sim.real_time_index),0),len(mujoco.viewer.PERCENT_REALTIME)-1)
                 a[14]=100.0/float(mujoco.viewer.PERCENT_REALTIME[idx])
                 a[16]=float(sim.ctrl_noise_std)
                 a[17]=float(sim.ctrl_noise_rate)

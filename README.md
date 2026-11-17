@@ -120,7 +120,7 @@ Case-insensitive commands accepted in both simulation and onboard/offboard termi
 | Lift / lower robot | `↑` / `↓` (`PageUp`/`PageDown`, `7`/`8`, `KP7`/`KP9` & `KP1`/`KP3`) | Raises or lowers target height by `0.05 m` per press |
 | One-key release | `F10` / `0` / `Delete` | Immediately disables suspension support (`RELEASED (OFF)`) |
 | Toggle enable / release | `H` / `KP0` / `KP5` | Switches between `ENABLED` and `RELEASED (OFF)` |
-| Increase / decrease stiffness | `=` / `KP+` (`KP8`/`KP6`) and `-` / `KP-` (`KP2`/`KP4`) | Adjusts spring stiffness (`N/m`); decreasing below `65 N/m` releases |
+| Increase / decrease stiffness | `.` / `KP+` (`KP8`/`KP6`) and `,` / `KP-` (`KP2`/`KP4`) | Adjusts spring stiffness (`N/m`); decreasing below `65 N/m` releases (`-`/`=` remain free for MuJoCo sim speed) |
 
 - **Viewer HUD status:** The top-left overlay always shows `Suspension: ENABLED (z=...m, k=...N/m)` or `RELEASED (OFF)`, along with the `Sling keys (focus window)` reminder.
 
