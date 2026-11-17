@@ -108,7 +108,21 @@ bash scripts/setup_mujoco4_dev.sh
 | `REF [参数]` | 选择 SDK-A 参考动作切片（`STAND` / `DANCE` / `FULL` / `<start> <end>`） |
 | `WALK` | 启动 `DEXAMP` 速度行走策略（初始零速） |
 | `VEL vx vy [wz]` | 在 `WALK` 状态下实时更新前向/侧向/偏航速度 |
-| `HANG ON\|OFF\|UP\|DOWN\|STRONGER\|WEAKER` | *（仅仿真可用）* 虚拟弹性吊绳保护（快捷键：`F9`/`F10`、`7`/`8`、方向键 `Up`/`Down`） |
+| `HANG ON\|OFF\|UP\|DOWN\|STRONGER\|WEAKER` | *（仅仿真可用）* 虚拟弹性吊绳保护（快捷键与状态说明见下方[仿真吊绳快捷键](#仿真吊绳快捷键)） |
+
+### 仿真吊绳快捷键
+
+> **所需窗口焦点：** 键盘快捷键仅在 **MuJoCo 3D 仿真窗口**获得键盘焦点时生效（请先鼠标点击仿真窗口）。当终端窗口获得焦点时，请直接输入 `HANG ON|OFF|UP|DOWN|STRONGER|WEAKER`。
+
+| 操作 | MuJoCo 仿真窗口快捷键 | 说明 |
+| :--- | :--- | :--- |
+| 启用吊绳支撑 | `F9` / `9` / `Insert`（释放状态下按 `↑` 也会启用） | 开启虚拟弹性吊绳支撑（`ENABLED`） |
+| 抬升 / 下降机器人 | `↑` / `↓`（亦支持 `PageUp`/`PageDown`、`7`/`8`、小键盘 `7`/`9` 与 `1`/`3`） | 每次按键调整目标悬吊高度 `±0.05 m` |
+| 一键释放吊绳 | `F10` / `0` / `Delete` | 单次按键立即关闭吊绳支撑（`RELEASED (OFF)`） |
+| 切换启用 / 释放 | `H` / 小键盘 `0` / 小键盘 `5` | 在 `ENABLED` 与 `RELEASED (OFF)` 间切换 |
+| 增强 / 减弱刚度 | `.` / `KP+`（`KP8`/`KP6`）与 `,` / `KP-`（`KP2`/`KP4`） | 调节弹簧刚度（`N/m`），降至 `65 N/m` 以下自动释放（`-`/`=` 保留给 MuJoCo 调速） |
+
+- **窗口状态提示：** 仿真窗口左上角 HUD 实时显示 `Suspension: ENABLED (z=...m, k=...N/m)`（已启用）或 `RELEASED (OFF)`（已释放），并持续提示 `Sling keys (focus window)` 快捷键及窗口焦点要求。
 
 ---
 
@@ -162,6 +176,7 @@ Xrobot3/
 
 # 2. 离线 25 态切换、WALK/VEL、FILTER/REF 与 HANG 硬件隔离校验
 source env.sh && python scripts/check_onboard_terminal.py
+.venv-mj4/bin/python scripts/check_sim_suspension.py
 
 # 3. SDK 自动更新与 MuJoCo 4.0 / 3.3.7 仿真冒烟测试
 ./xrobot3 sync

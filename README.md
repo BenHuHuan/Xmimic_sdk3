@@ -108,7 +108,21 @@ Case-insensitive commands accepted in both simulation and onboard/offboard termi
 | `REF [arg]` | Select SDK-A reference slice (`STAND` / `DANCE` / `FULL` / `<start> <end>`) |
 | `WALK` | Run `DEXAMP` velocity locomotion policy at zero velocity |
 | `VEL vx vy [wz]` | Update walking velocity (`m/s`, `rad/s`) while `WALK` is active |
-| `HANG ON\|OFF\|UP\|DOWN\|STRONGER\|WEAKER` | *(Simulation only)* Virtual elastic torso suspension (hotkeys: `F9`/`F10`, `7`/`8`, `Up`/`Down`) |
+| `HANG ON\|OFF\|UP\|DOWN\|STRONGER\|WEAKER` | *(Simulation only)* Virtual elastic torso suspension (see [Simulation Suspension Hotkeys](#simulation-suspension-hotkeys)) |
+
+### Simulation Suspension Hotkeys
+
+> **Window focus required:** Viewer keyboard shortcuts only take effect when the **MuJoCo 3D viewer window** has keyboard focus (click inside the viewer window first). When the terminal has focus, use `HANG ON|OFF|UP|DOWN|STRONGER|WEAKER` instead.
+
+| Action | MuJoCo Viewer Hotkeys | Notes |
+| :--- | :--- | :--- |
+| Enable suspension | `F9` / `9` / `Insert` (or `↑` when released) | Engages virtual elastic support (`ENABLED`) |
+| Lift / lower robot | `↑` / `↓` (`PageUp`/`PageDown`, `7`/`8`, `KP7`/`KP9` & `KP1`/`KP3`) | Raises or lowers target height by `0.05 m` per press |
+| One-key release | `F10` / `0` / `Delete` | Immediately disables suspension support (`RELEASED (OFF)`) |
+| Toggle enable / release | `H` / `KP0` / `KP5` | Switches between `ENABLED` and `RELEASED (OFF)` |
+| Increase / decrease stiffness | `.` / `KP+` (`KP8`/`KP6`) and `,` / `KP-` (`KP2`/`KP4`) | Adjusts spring stiffness (`N/m`); decreasing below `65 N/m` releases (`-`/`=` remain free for MuJoCo sim speed) |
+
+- **Viewer HUD status:** The top-left overlay always shows `Suspension: ENABLED (z=...m, k=...N/m)` or `RELEASED (OFF)`, along with the `Sling keys (focus window)` reminder.
 
 ---
 
@@ -162,6 +176,7 @@ Recommended pre-release verification suite:
 
 # 2. Offline 25-transition FSM, WALK/VEL, FILTER/REF & HANG-exclusion check
 source env.sh && python scripts/check_onboard_terminal.py
+.venv-mj4/bin/python scripts/check_sim_suspension.py
 
 # 3. SDK auto-updater & MuJoCo 4.0 / 3.3.7 simulation smoke tests
 ./xrobot3 sync
