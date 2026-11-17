@@ -4,20 +4,37 @@ import subprocess,sys,time,json,socket
 import mujoco
 import numpy as np
 from glfw import (
-    KEY_F9, KEY_F10, KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT,
+    KEY_F9, KEY_F10, KEY_INSERT, KEY_DELETE, KEY_UP, KEY_DOWN,
     KEY_PAGE_UP, KEY_PAGE_DOWN, KEY_EQUAL, KEY_MINUS,
+    KEY_0, KEY_7, KEY_8, KEY_9, KEY_H,
     KEY_KP_0, KEY_KP_1, KEY_KP_2, KEY_KP_3, KEY_KP_4,
     KEY_KP_5, KEY_KP_6, KEY_KP_7, KEY_KP_8, KEY_KP_9,
     KEY_KP_ADD, KEY_KP_SUBTRACT,
 )
 
+# Viewer-window hotkeys require keyboard focus on the MuJoCo viewer window.
+# Avoid KEY_LEFT/KEY_RIGHT because MuJoCo Simulate binds them to pause/history step.
 HANG_KEYS={
-    KEY_F9:'ON', KEY_F10:'OFF', KEY_KP_0:'TOGGLE', KEY_KP_5:'TOGGLE',
-    ord('7'):'UP', KEY_KP_7:'UP', KEY_KP_9:'UP', KEY_PAGE_UP:'UP',
-    ord('8'):'DOWN', KEY_KP_1:'DOWN', KEY_KP_3:'DOWN', KEY_PAGE_DOWN:'DOWN',
-    KEY_UP:'STRONGER', KEY_RIGHT:'STRONGER', KEY_KP_8:'STRONGER', KEY_KP_6:'STRONGER', KEY_KP_ADD:'STRONGER', KEY_EQUAL:'STRONGER',
-    KEY_DOWN:'WEAKER', KEY_LEFT:'WEAKER', KEY_KP_2:'WEAKER', KEY_KP_4:'WEAKER', KEY_KP_SUBTRACT:'WEAKER', KEY_MINUS:'WEAKER',
+    KEY_F9:'ON', KEY_INSERT:'ON', KEY_9:'ON',
+    KEY_F10:'OFF', KEY_DELETE:'OFF', KEY_0:'OFF',
+    KEY_KP_0:'TOGGLE', KEY_KP_5:'TOGGLE', KEY_H:'TOGGLE',
+    KEY_UP:'UP', KEY_7:'UP', KEY_KP_7:'UP', KEY_KP_9:'UP', KEY_PAGE_UP:'UP',
+    KEY_DOWN:'DOWN', KEY_8:'DOWN', KEY_KP_1:'DOWN', KEY_KP_3:'DOWN', KEY_PAGE_DOWN:'DOWN',
+    KEY_EQUAL:'STRONGER', KEY_KP_ADD:'STRONGER', KEY_KP_8:'STRONGER', KEY_KP_6:'STRONGER',
+    KEY_MINUS:'WEAKER', KEY_KP_SUBTRACT:'WEAKER', KEY_KP_2:'WEAKER', KEY_KP_4:'WEAKER',
 }
+
+def format_suspension_hud(enabled,target_z,stiffness):
+    """Return (status_text, hotkey_focus_hint) for the MuJoCo viewer HUD."""
+    if enabled:
+        return (
+            f'ENABLED (z={target_z:.2f}m, k={stiffness:.0f}N/m)',
+            'Up/Down: lift/lower | F10/0/Del: release | =/-: stiffness',
+        )
+    return (
+        'RELEASED (OFF)',
+        'F9/9/Up: hang | Up/Down: lift/lower | F10/0/Del: release',
+    )
 
 class RenderBridge:
     def __init__(self,model,output):
@@ -260,7 +277,7 @@ def main():
 
             if rendered_frames>=2 and now-last_text_time>=0.1 and not sim.exitrequest and a[0]:
                 state={0:'STOP',1:'ZERO',2:'SDK-A',3:'WALK',4:'FIX'}.get(int(a[9]),'Waiting for SDK')
-                hang_str=f'ON (z={a[12]:.2f}m, k={a[15]:.0f}N/m)' if a[11]>0.5 else 'OFF (KP+/Up/F9 to hang)'
+                hang_str,hang_hint=format_suspension_hud(a[11]>0.5,a[12],a[15])
                 flt_str=f'ON (alpha={a[22]:.2f})' if a[22]>0.0 else 'OFF (RAW)'
                 j_score=float(a[23]);t_score=float(a[24]);p_freq=float(a[25])
                 p_idx=int(a[26]) if 0<=int(a[26])<len(joint_names) else 0
@@ -284,8 +301,8 @@ def main():
                     (
                         int(mujoco.mjtFontScale.mjFONTSCALE_100),
                         int(mujoco.mjtGridPos.mjGRID_TOPLEFT),
-                        'Simulation time\nReal-time factor\nPhysics steps (measured)\nPhysics rate (configured)\nSDK control (measured)\nFSM compute (mean)\nViewer FPS\nFSM state\nAction filter\nSuspension\nHF Jitter / Twitch',
-                        f'{cur_simtime:.1f} s\n{a[6]:.2f} x\n{a[6]/a[10]:.0f} Hz\n{1/a[10]:.0f} Hz\n{a[7]:.1f} Hz\n{a[8]:.2f} ms\n{a[4]:.1f}\n{state}\n{flt_str}\n{hang_str}\n{j_pct:.0f}% / {t_pct:.0f}% ({act_n} jnt)',
+                        'Simulation time\nReal-time factor\nPhysics steps (measured)\nPhysics rate (configured)\nSDK control (measured)\nFSM compute (mean)\nViewer FPS\nFSM state\nAction filter\nSuspension\nSling keys (focus window)\nHF Jitter / Twitch',
+                        f'{cur_simtime:.1f} s\n{a[6]:.2f} x\n{a[6]/a[10]:.0f} Hz\n{1/a[10]:.0f} Hz\n{a[7]:.1f} Hz\n{a[8]:.2f} ms\n{a[4]:.1f}\n{state}\n{flt_str}\n{hang_str}\n{hang_hint}\n{j_pct:.0f}% / {t_pct:.0f}% ({act_n} jnt)',
                     ),
                     (
                         banner_scale,
