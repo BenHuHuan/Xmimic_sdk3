@@ -12,6 +12,8 @@ class SimSuspension:
         self.damping=1.4*np.sqrt(self.mass*self.stiffness)
     def _enable_at(self,position):
         if not self.enabled:
+            if self.stiffness<250.0:self.stiffness=1000.0
+            self.damping=1.4*np.sqrt(self.mass*self.stiffness)
             self.target=np.array(position,dtype=float).copy()
             self.target[2]=max(self.target[2],1.15)
         self.enabled=True
@@ -34,8 +36,6 @@ class SimSuspension:
                     self.damping=1.4*np.sqrt(self.mass*self.stiffness)
         elif command=='OFF':self.enabled=False
         elif command=='ON':
-            if self.stiffness<250.0:self.stiffness=1000.0
-            self.damping=1.4*np.sqrt(self.mass*self.stiffness)
             self._enable_at(position)
         elif command in ('UP','DOWN'):
             if not self.enabled and command=='UP':

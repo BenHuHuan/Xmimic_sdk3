@@ -63,9 +63,12 @@ def start_state_terminal(controller):
         fd=os.environ.get('TG_CONSOLE_FD')
         ui=os.fdopen(os.dup(int(fd)),'w',buffering=1) if fd else sys.stdout
         commands='STOP / ZERO / FIX / SDK-A / FILTER [ON|OFF|alpha] / REF STAND|DANCE|FULL / WALK / VEL vx vy [wz]'
-        if getattr(controller,'simulation_fix',None) is not None:
+        has_sim_fix=getattr(controller,'simulation_fix',None) is not None
+        if has_sim_fix:
             commands+=' / HANG ON|OFF|UP|DOWN|STRONGER|WEAKER'
         print(commands,file=ui,flush=True)
+        if has_sim_fix:
+            print('Viewer sling hotkeys (click MuJoCo window to focus): F9/9=hang, Up/Down=lift/lower, F10/0/Del=release, =/-=stiffness',file=ui,flush=True)
         while True:
             if sys.stdin.isatty():
                 ui.write('xrobot3> ');ui.flush()
