@@ -134,6 +134,7 @@ def check_runtime_discovery():
         (fake_root / 'raisim' / 'lib').mkdir(parents=True)
         (fake_root / 'rayrai' / 'lib').mkdir(parents=True)
         (fake_root / 'build-py' / 'raisimPy').mkdir(parents=True)
+        (fake_root / 'build' / 'raisimPy').mkdir(parents=True)
         py = fake_root / '.venv' / 'bin' / 'python'
         py.parent.mkdir(parents=True)
         py.write_text('#!/bin/sh\nexit 0\n')
@@ -151,6 +152,7 @@ def check_runtime_discovery():
             assert '/python3.10/' not in env['PYTHONPATH']
             assert '/custom/path' in env['PYTHONPATH']
             assert str(fake_root.resolve() / 'build-py' / 'raisimPy') in env['PYTHONPATH']
+            assert str(fake_root.resolve() / 'build' / 'raisimPy') in env['PYTHONPATH']
     print('PASS: RaiSim runtime discovery & Python ABI env isolation')
 
 

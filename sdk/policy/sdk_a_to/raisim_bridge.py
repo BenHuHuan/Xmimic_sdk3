@@ -43,7 +43,11 @@ from raisim_worker import (
 
 
 def _is_raisim_root(path):
-    return path.is_dir() and ((path / 'raisim').is_dir() or (path / 'build-py' / 'raisimPy').is_dir())
+    return path.is_dir() and (
+        (path / 'raisim').is_dir()
+        or (path / 'build-py' / 'raisimPy').is_dir()
+        or (path / 'build' / 'raisimPy').is_dir()
+    )
 
 
 def find_raisim_runtime(project_root):
@@ -101,9 +105,15 @@ def find_raisim_runtime(project_root):
         if env.get('LD_LIBRARY_PATH'):
             ld_parts.append(env['LD_LIBRARY_PATH'])
         env['LD_LIBRARY_PATH'] = os.pathsep.join(ld_parts)
-        build_py = raisim_root / 'build-py' / 'raisimPy'
-        if build_py.is_dir():
-            pp = [str(build_py)]
+        py_dirs = []
+        if os.environ.get('RAISIMPY_BUILD_DIR'):
+            py_dirs.append(Path(os.environ['RAISIMPY_BUILD_DIR']).expanduser())
+        for sub in ('build-py', 'build'):
+            cand_py = raisim_root / sub / 'raisimPy'
+            if cand_py.is_dir():
+                py_dirs.append(cand_py)
+        if py_dirs:
+            pp = [str(p) for p in py_dirs]
             if env.get('PYTHONPATH'):
                 pp.append(env['PYTHONPATH'])
             env['PYTHONPATH'] = os.pathsep.join(pp)
