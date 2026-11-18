@@ -143,6 +143,37 @@ bash scripts/setup_mujoco4_dev.sh
 | `./xrobot3 interfaces` | 列出本机可用于 DDS 通信的 IPv4 网卡 |
 | `./xrobot3 sync` | 带进度条自动更新最新 `main` 版 SDK 文件（支持有/无 `.git` 部署机环境，可选 `--reinstall` / `--tarball` / `--dry-run`） |
 | `./xrobot3 check` | 校验 Python 环境、ROS 2 消息包及 ONNX / `deploy.json` 契约 |
+| `./xrobot3 diagnose` | 一键诊断 ROS 2、GPU、DDS 网卡、默认 MuJoCo 与可选 RaiSim 就绪状态（支持 `--json`、`--strict-raisim`） |
+
+---
+
+## 可选：安装与启用 RaiSim + Rayrai（`--physics raisim`）
+
+> **完全解耦设计：** RaiSim 为**可选后端**。即使本机未安装 RaiSim 或没有授权文件，默认 `--physics mujoco`（`./xrobot3 run --interface lo`）、`./xrobot3 check`、`./xrobot3 diagnose` 以及真机部署均不受任何影响；若在未安装/未激活环境下显式指定 `--physics raisim`，CLI 会立即给出明确安装/授权指引及 `--physics mujoco` 回退提示。
+
+1. **安装系统依赖**（Ubuntu 22.04 / 24.04）：
+   ```bash
+   sudo apt-get update && sudo apt-get install -y cmake g++ libeigen3-dev libsdl2-dev python3-venv
+   ```
+2. **拉取 `raisim2Lib` 并编译 `raisimPy` 与 `rayrai`**（建议在 `raisim2Lib/.venv` 独立虚拟环境中构建，避免与 ROS 2 Humble Python 3.10 冲突）：
+   ```bash
+   git clone https://github.com/raisimTech/raisim2Lib.git ../raisim2Lib
+   cd ../raisim2Lib
+   python3 -m venv .venv && source .venv/bin/activate
+   pip install numpy
+   source ./raisim_env.sh
+   cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DRAISIM_EXAMPLE=ON -DRAISIM_PY=ON
+   cmake --build build --parallel
+   ```
+   > 默认按 `$RAISIM2LIB_ROOT`、同级目录 `../raisim2Lib`、`~/raisim2Lib` 自动发现；如放在其他目录，请设置 `export RAISIM2LIB_ROOT=/path/to/raisim2Lib`（必要时可设 `RAISIM_PYTHON`）。
+3. **配置授权文件 `activation.raisim`**：
+   - 通过 RaiSim 官方表单（`https://forms.gle/4bcS2GByKYdeKxmn7`）申请免费的 Academic / Trial 授权。
+   - 将收到的授权文件保存为 `~/.raisim/activation.raisim`（或设置环境变量 `RAISIM_ACTIVATION_KEY`）。
+4. **诊断与启动**：
+   ```bash
+   ./xrobot3 diagnose
+   ./xrobot3 run --interface lo --physics raisim
+   ```
 
 ---
 
@@ -178,8 +209,9 @@ Xrobot3/
 推荐的发布前验证流程：
 
 ```bash
-# 1. 环境、29 自由度 ONNX/deploy 契约与 MuJoCo 4.0.0 模型校验
+# 1. 环境、29 自由度 ONNX/deploy 契约、MuJoCo 4.0.0 模型校验与系统诊断
 ./xrobot3 check
+./xrobot3 diagnose
 
 # 2. 离线 25 态切换、WALK/VEL、FILTER/REF、HANG 隔离与 RaiSim 后端契约校验
 source env.sh && python scripts/check_onboard_terminal.py

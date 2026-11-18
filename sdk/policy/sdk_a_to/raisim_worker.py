@@ -90,17 +90,20 @@ def _quat_from_z_to_vec(vec):
 
 
 def find_activation_key(explicit_key=None, raisim_root=None):
-    candidates = []
     if explicit_key:
-        candidates.append(Path(explicit_key).expanduser())
+        p = Path(explicit_key).expanduser()
+        return str(p.resolve()) if p.is_file() else None
     env_key = os.environ.get('RAISIM_ACTIVATION_KEY')
-    if env_key:
-        candidates.append(Path(env_key).expanduser())
-    candidates.extend([
+    if env_key is not None:
+        if not env_key.strip():
+            return None
+        p = Path(env_key).expanduser()
+        return str(p.resolve()) if p.is_file() else None
+    candidates = [
         Path.home() / '.raisim' / 'activation.raisim',
         Path.home() / 'raisim' / 'activation.raisim',
         Path.home() / 'Downloads' / 'activation.raisim',
-    ])
+    ]
     if raisim_root:
         candidates.append(Path(raisim_root) / 'rsc' / 'activation.raisim')
     for path in candidates:
@@ -181,11 +184,21 @@ def main():
     p.add_argument('--activation-key', default='')
     args = p.parse_args()
 
-    import raisimpy as raisim
+    try:
+        import raisimpy as raisim
+    except ImportError as exc:
+        raise RuntimeError(
+            f'Failed to import raisimpy ({exc}). Install/build raisim2Lib with `-DRAISIM_PY=ON` '
+            'and set `RAISIM2LIB_ROOT`, or run with `--physics mujoco`.'
+        ) from exc
 
     key_path = find_activation_key(args.activation_key or None, args.raisim_root or None)
-    if key_path:
-        raisim.World.setActivationKey(key_path)
+    if key_path is None:
+        raise RuntimeError(
+            'RaiSim activation key not found (~/.raisim/activation.raisim or RAISIM_ACTIVATION_KEY). '
+            'Install a valid activation.raisim or run with `--physics mujoco`.'
+        )
+    raisim.World.setActivationKey(key_path)
 
     meta = json.loads(args.meta.read_text())
     joint_names = meta['joint_names']

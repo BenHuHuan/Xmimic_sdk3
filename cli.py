@@ -274,6 +274,9 @@ for name in ['upload','deploy','remote','body']:
  if name=='body':
   q.add_argument('--stop',action='store_true',help='Stop running body_control process')
 sub.add_parser('check',help='Verify Python environment, ROS 2 messages, and ONNX/deploy contracts')
+dg=sub.add_parser('diagnose',aliases=['dignose'],help='Inspect environment, GPU, DDS network, MuJoCo, and optional RaiSim readiness')
+dg.add_argument('--json',action='store_true',help='Print diagnostics as JSON')
+dg.add_argument('--strict-raisim',action='store_true',help='Exit non-zero if optional RaiSim backend is not ready')
 sub.add_parser('interfaces',help='List local IPv4 interfaces for wired/wireless DDS')
 sy=sub.add_parser('sync',help='Auto-update SDK files to the latest main release with progress bar')
 sy.add_argument('--remote',default='origin',help='Git remote name when in a git checkout (default: origin)')
@@ -327,6 +330,13 @@ if a.cmd in ('upload','deploy','remote','body') or (a.cmd=='run' and a.host):
   if getattr(a,'dry_run',False):print('Command:',shlex.join(ssh_command))
   else:subprocess.run(ssh_command,check=True)
  sys.exit()
+if a.cmd in ('diagnose','dignose'):
+ sys.path.insert(0,str(ROOT/'sdk/local_setup'))
+ from diagnose import format_report,run_diagnostics
+ report=run_diagnostics(ROOT,strict_raisim=a.strict_raisim)
+ if a.json:print(json.dumps(report,indent=2))
+ else:print(format_report(report))
+ sys.exit(0 if report['overall_ok'] else 1)
 if a.cmd=='check':
  _maybe_notify_sdk_update()
  subprocess.run([sys.executable,str(ROOT/'sdk/local_setup/check_sdk_a_hardware.py')],check=True)
@@ -359,6 +369,15 @@ if a.target=='sim':
   if not os.access(python,os.X_OK):p.error(f'MuJoCo {mj_ver} needs .venv-mj4; run: bash scripts/setup_mujoco4_dev.sh (or pass --mujoco-version 3.3.7)')
   env['VIRTUAL_ENV']=str(ROOT/'.venv-mj4');env['PATH']=str(ROOT/'.venv-mj4/bin')+os.pathsep+env.get('PATH','')
  if use_raisim:
+  if not a.dry_run:
+   sys.path.insert(0,str(ROOT/'sdk/policy/sdk_a_to'))
+   from raisim_bridge import probe_raisim
+   rs=probe_raisim(ROOT)
+   if not rs['available']:
+    print(f"ERROR: RaiSim backend unavailable ({rs['status']}): {rs['detail']}",file=sys.stderr)
+    if rs['hint']:print('Hint:',rs['hint'],file=sys.stderr)
+    print('Fallback: Run with default MuJoCo backend: ./xrobot3 run --interface lo --physics mujoco',file=sys.stderr)
+    sys.exit(1)
   print('Physics: raisim',f'(RaiSim + {a.raisim_renderer})',flush=True)
  else:
   print('Physics: mujoco','(MuJoCo 4.0)' if use_mj4 else '(MuJoCo 3.3.7)',flush=True)

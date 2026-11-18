@@ -38,34 +38,46 @@ from raisim_worker import (
     SH_TAUFF,
     SH_TIME,
     SH_TWITCH_PCT,
+    find_activation_key,
 )
+
+
+def _is_raisim_root(path):
+    return path.is_dir() and ((path / 'raisim').is_dir() or (path / 'build-py' / 'raisimPy').is_dir())
 
 
 def find_raisim_runtime(project_root):
     """Locate (raisim_root, python_executable, env) for running raisimpy + rayrai."""
+    explicit_root = os.environ.get('RAISIM2LIB_ROOT')
     candidates = []
-    for key in ('RAISIM2LIB_ROOT', 'RAISIM_LOCAL_INSTALL_ROOT'):
-        val = os.environ.get(key)
-        if val:
-            candidates.append(Path(val).expanduser())
-    project_root = Path(project_root).resolve()
-    candidates.extend([
-        project_root.parent / 'raisim2Lib',
-        Path.home() / 'raisim2Lib',
-        Path('/media/huan/本地磁盘/raisim2Lib'),
-    ])
+    if explicit_root is not None:
+        if explicit_root.strip():
+            candidates.append(Path(explicit_root).expanduser())
+    else:
+        local_root = os.environ.get('RAISIM_LOCAL_INSTALL_ROOT')
+        if local_root:
+            candidates.append(Path(local_root).expanduser())
+        project_root = Path(project_root).resolve()
+        candidates.extend([
+            project_root.parent / 'raisim2Lib',
+            Path.home() / 'raisim2Lib',
+            Path('/media/huan/本地磁盘/raisim2Lib'),
+        ])
     raisim_root = None
     for cand in candidates:
-        if cand.is_dir() and ((cand / 'raisim').is_dir() or (cand / 'build-py' / 'raisimPy').is_dir()):
+        if _is_raisim_root(cand):
             raisim_root = cand.resolve()
             break
 
     py_candidates = []
-    if os.environ.get('RAISIM_PYTHON'):
-        py_candidates.append(Path(os.environ['RAISIM_PYTHON']).expanduser())
-    if raisim_root is not None:
-        py_candidates.append(raisim_root / '.venv' / 'bin' / 'python')
-    py_candidates.append(Path(sys.executable))
+    explicit_py = os.environ.get('RAISIM_PYTHON')
+    if explicit_py is not None:
+        if explicit_py.strip():
+            py_candidates.append(Path(explicit_py).expanduser())
+    else:
+        if raisim_root is not None:
+            py_candidates.append(raisim_root / '.venv' / 'bin' / 'python')
+        py_candidates.append(Path(sys.executable))
 
     python_exe = None
     for py in py_candidates:
@@ -73,7 +85,10 @@ def find_raisim_runtime(project_root):
             python_exe = str(py)
             break
     if python_exe is None:
-        raise RuntimeError('No executable Python found for RaiSim worker (set RAISIM_PYTHON or RAISIM2LIB_ROOT).')
+        raise RuntimeError(
+            'No executable Python found for RaiSim worker (set RAISIM_PYTHON or RAISIM2LIB_ROOT). '
+            'You can keep using MuJoCo via `--physics mujoco`.'
+        )
 
     env = os.environ.copy()
     # Strip ROS Python 3.10 paths when launching a separate RaiSim venv (e.g. Python 3.12).
@@ -94,6 +109,119 @@ def find_raisim_runtime(project_root):
             env['PYTHONPATH'] = os.pathsep.join(pp)
         env['RAISIM_LOCAL_INSTALL_ROOT'] = str(raisim_root)
     return raisim_root, python_exe, env
+
+
+def _parse_license_footer(key_path):
+    info = {}
+    try:
+        for line in Path(key_path).read_text(errors='replace').splitlines():
+            if ':' in line:
+                k, v = line.split(':', 1)
+                k = k.strip().upper()
+                if k in ('ISSUED TO', 'MACHINE ID', 'EXPIRY DATE', 'LICENSE TYPE'):
+                    info[k.lower().replace(' ', '_')] = v.strip()
+    except OSError:
+        pass
+    return info
+
+
+def probe_raisim(project_root=None):
+    """Non-throwing capability probe for RaiSim runtime, Rayrai, and activation key."""
+    if project_root is None:
+        project_root = Path(__file__).resolve().parents[3]
+    result = {
+        'available': False,
+        'runtime_ok': False,
+        'rayrai_ok': False,
+        'license_ok': False,
+        'raisim_root': None,
+        'python': None,
+        'activation_key': None,
+        'license_info': {},
+        'status': 'missing_runtime',
+        'detail': '',
+        'hint': (
+            'RaiSim (raisim2Lib / raisimpy) was not found. '
+            'Clone/build raisim2Lib with `-DRAISIM_PY=ON` next to Xrobot3 (or set `RAISIM2LIB_ROOT`). '
+            'Default `--physics mujoco` continues to work without RaiSim.'
+        ),
+    }
+    try:
+        raisim_root, python_exe, env = find_raisim_runtime(project_root)
+    except Exception as exc:
+        result['detail'] = str(exc)
+        return result
+
+    result['raisim_root'] = str(raisim_root) if raisim_root is not None else None
+    result['python'] = python_exe
+
+    key_path = find_activation_key(None, str(raisim_root) if raisim_root is not None else None)
+    if key_path:
+        result['activation_key'] = key_path
+        result['license_info'] = _parse_license_footer(key_path)
+
+    # Probe raisimpy importability first without constructing World (so missing license gives clean status).
+    imp = subprocess.run(
+        [python_exe, '-c', 'import raisimpy as r; print(int(bool(getattr(r, "hasRayrai", False))))'],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=8,
+    )
+    if imp.returncode != 0:
+        err = (imp.stderr or imp.stdout or '').strip().splitlines()
+        result['status'] = 'missing_runtime'
+        result['detail'] = err[-1] if err else 'raisim2Lib / raisimpy not installed'
+        return result
+
+    result['runtime_ok'] = True
+    result['rayrai_ok'] = imp.stdout.strip().splitlines()[-1] == '1'
+
+    if not key_path:
+        result['status'] = 'missing_license'
+        result['detail'] = 'No activation.raisim found in ~/.raisim/activation.raisim or RAISIM_ACTIVATION_KEY'
+        result['hint'] = (
+            'RaiSim runtime is installed, but no activation key was found. '
+            'Request a free Academic/Trial key via the RaiSim License Form and place it at '
+            '`~/.raisim/activation.raisim` (or set `RAISIM_ACTIVATION_KEY`). '
+            'Default `--physics mujoco` continues to work without a RaiSim license.'
+        )
+        return result
+
+    lic_code = (
+        'import sys, raisimpy as r; '
+        'r.World.setActivationKey(sys.argv[1]); '
+        'w = r.World(); '
+        'print("OK")'
+    )
+    try:
+        lic = subprocess.run(
+            [python_exe, '-c', lic_code, key_path],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except subprocess.TimeoutExpired:
+        lic = None
+
+    if lic is None or lic.returncode != 0 or 'OK' not in lic.stdout:
+        msg = '' if lic is None else ((lic.stderr or lic.stdout or '').strip())
+        result['status'] = 'invalid_license'
+        result['detail'] = msg.splitlines()[-1] if msg else 'RaiSim World() activation check failed'
+        result['hint'] = (
+            f'RaiSim failed license activation using `{key_path}`. '
+            'Verify the key MACHINE ID matches this host and is not expired, or update `~/.raisim/activation.raisim`. '
+            'Default `--physics mujoco` continues to work without a RaiSim license.'
+        )
+        return result
+
+    result['license_ok'] = True
+    result['available'] = True
+    result['status'] = 'ready'
+    result['detail'] = 'RaiSim World + license verified' + (' (Rayrai enabled)' if result['rayrai_ok'] else ' (TCP server only)')
+    result['hint'] = ''
+    return result
 
 
 class RaisimBridge:

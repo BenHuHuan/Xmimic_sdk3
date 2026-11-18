@@ -17,6 +17,7 @@ __pycache__/
 README.old*
 sdk/local_setup/*
 !sdk/local_setup/check_sdk_a_hardware.py
+!sdk/local_setup/diagnose.py
 sdk/policy/sdk_a_to/*.before_*
 sdk/policy/sdk_a_to/*before*.txt
 MUJOCO_LOG.TXT
