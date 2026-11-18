@@ -143,6 +143,37 @@ Case-insensitive commands accepted in both simulation and onboard/offboard termi
 | `./xrobot3 interfaces` | List local IPv4 interfaces for DDS selection |
 | `./xrobot3 sync` | Auto-update SDK files to the latest `main` release with progress bar (works with or without `.git`; `--reinstall` / `--tarball` / `--dry-run`) |
 | `./xrobot3 check` | Verify Python env, ROS 2 messages, and ONNX / `deploy.json` contracts |
+| `./xrobot3 diagnose` | Inspect ROS 2, GPU, DDS network, default MuJoCo, and optional RaiSim readiness (`--json`, `--strict-raisim`) |
+
+---
+
+## Optional: Installing RaiSim + Rayrai (`--physics raisim`)
+
+> **Decoupled by design:** RaiSim is completely **optional**. If RaiSim or a license key is not installed, default `./xrobot3 run --interface lo` (`--physics mujoco`), `./xrobot3 check`, `./xrobot3 diagnose`, and real-robot deployment work with zero RaiSim dependencies. Running `--physics raisim` without RaiSim/license exits immediately with an actionable prompt and suggests `--physics mujoco`.
+
+1. **Install system dependencies** (Ubuntu 22.04 / 24.04):
+   ```bash
+   sudo apt-get update && sudo apt-get install -y cmake g++ libeigen3-dev libsdl2-dev python3-venv
+   ```
+2. **Clone `raisim2Lib` and build `raisimPy` + `rayrai`** (inside its own Python venv, e.g. `.venv`, so it does not conflict with ROS 2 Humble Python 3.10):
+   ```bash
+   git clone https://github.com/raisimTech/raisim2Lib.git ../raisim2Lib
+   cd ../raisim2Lib
+   python3 -m venv .venv && source .venv/bin/activate
+   pip install numpy
+   source ./raisim_env.sh
+   cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DRAISIM_EXAMPLE=ON -DRAISIM_PY=ON
+   cmake --build build --parallel
+   ```
+   > Auto-discovery checks `$RAISIM2LIB_ROOT`, sibling `../raisim2Lib`, and `~/raisim2Lib`. Set `export RAISIM2LIB_ROOT=/path/to/raisim2Lib` (and optionally `RAISIM_PYTHON`) if placed elsewhere.
+3. **Install your RaiSim activation key (`activation.raisim`)**:
+   - Request a free Academic or Trial key from the RaiSim License Form (`https://forms.gle/4bcS2GByKYdeKxmn7` / RaiSim docs).
+   - Place the issued key file at `~/.raisim/activation.raisim` (or point `RAISIM_ACTIVATION_KEY=/path/to/activation.raisim`).
+4. **Verify readiness before running**:
+   ```bash
+   ./xrobot3 diagnose
+   ./xrobot3 run --interface lo --physics raisim
+   ```
 
 ---
 
@@ -178,8 +209,9 @@ Xrobot3/
 Recommended pre-release verification suite:
 
 ```bash
-# 1. Environment, 29-DoF ONNX/deploy contract & MuJoCo 4.0.0 model check
+# 1. Environment, 29-DoF ONNX/deploy contract, MuJoCo 4.0.0 & backend diagnostics
 ./xrobot3 check
+./xrobot3 diagnose
 
 # 2. Offline 25-transition FSM, WALK/VEL, FILTER/REF, HANG-exclusion & RaiSim backend checks
 source env.sh && python scripts/check_onboard_terminal.py

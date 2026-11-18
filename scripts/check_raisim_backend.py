@@ -18,7 +18,7 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'sdk' / 'policy' / 'sdk_a_to'))
 
-from raisim_bridge import RaisimBridge, find_raisim_runtime
+from raisim_bridge import RaisimBridge, find_raisim_runtime, probe_raisim
 from raisim_urdf import mjcf_to_raisim_urdf, quat_wxyz_to_rpy
 from raisim_worker import (
     SHARED_LEN,
@@ -281,6 +281,65 @@ def check_cli_dry_run():
     print('PASS: cli.py --physics {mujoco,raisim} & --mujoco-version --dry-run')
 
 
+def check_decoupling_and_diagnose():
+    # 1. Probe with missing RAISIM2LIB_ROOT must never raise and must give MuJoCo fallback hint.
+    with patch.dict(
+        os.environ,
+        {'RAISIM2LIB_ROOT': '/tmp/nonexistent_raisim_root', 'RAISIM_PYTHON': ''},
+        clear=False,
+    ):
+        rs_missing = probe_raisim(ROOT)
+        assert rs_missing['available'] is False
+        assert rs_missing['status'] == 'missing_runtime', rs_missing
+        assert '--physics mujoco' in rs_missing['hint'], rs_missing
+
+    # 2. If runtime exists, verify missing activation key yields status='missing_license' cleanly.
+    with patch.dict(os.environ, {'RAISIM_ACTIVATION_KEY': '/tmp/nonexistent_key.raisim'}, clear=False):
+        rs_nolic = probe_raisim(ROOT)
+        if rs_nolic['runtime_ok']:
+            assert rs_nolic['available'] is False
+            assert rs_nolic['status'] == 'missing_license', rs_nolic
+            assert '--physics mujoco' in rs_nolic['hint'], rs_nolic
+
+    # 3. End-to-end CLI decoupling tests when .venv wrapper environment is available.
+    if os.access(ROOT / '.venv' / 'bin' / 'python', os.X_OK):
+        no_raisim_env = {**os.environ, 'RAISIM2LIB_ROOT': '/tmp/nonexistent_raisim_root', 'RAISIM_PYTHON': ''}
+        diag = subprocess.run(
+            [str(ROOT / 'xrobot3'), 'diagnose', '--json'],
+            cwd=str(ROOT),
+            env=no_raisim_env,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        rep = json.loads(diag.stdout)
+        assert rep['overall_ok'] is True and rep['core_ok'] is True, rep
+        assert rep['mujoco']['ok'] is True, rep
+        assert rep['raisim']['available'] is False and rep['raisim']['status'] == 'missing_runtime', rep
+
+        fail_rs = subprocess.run(
+            [str(ROOT / 'xrobot3'), 'run', '--interface', 'lo', '--physics', 'raisim', '--headless'],
+            cwd=str(ROOT),
+            env=no_raisim_env,
+            capture_output=True,
+            text=True,
+        )
+        assert fail_rs.returncode != 0
+        assert 'RaiSim backend unavailable' in fail_rs.stderr, fail_rs.stderr
+        assert '--physics mujoco' in fail_rs.stderr, fail_rs.stderr
+
+        ok_mj = subprocess.run(
+            [str(ROOT / 'xrobot3'), 'run', '--interface', 'lo', '--physics', 'mujoco', '--headless', '--dry-run'],
+            cwd=str(ROOT),
+            env=no_raisim_env,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert 'Physics: mujoco' in ok_mj.stdout, ok_mj.stdout
+    print('PASS: RaiSim decoupling & ./xrobot3 diagnose verified')
+
+
 if __name__ == '__main__':
     check_urdf_converter()
     check_qrot_equivalence()
@@ -288,4 +347,5 @@ if __name__ == '__main__':
     check_runtime_discovery()
     check_bridge_ipc_roundtrip()
     check_cli_dry_run()
+    check_decoupling_and_diagnose()
     print('ALL OFFLINE RAISIM BACKEND CHECKS PASSED.')
