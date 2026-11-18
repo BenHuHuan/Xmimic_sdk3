@@ -10,7 +10,7 @@
 
 ## 核心特性
 
-- **默认启用 MuJoCo 4.0 仿真（`--physics 4.0`）**：物理步长 `1 kHz`，默认使用 `.venv-mj4`（MuJoCo 4.0），支持通过 `--physics 3.3.7` 一键回退至 `.venv`（MuJoCo 3.3.7）。
+- **默认启用 MuJoCo 仿真（`--physics mujoco`，默认版本 `4.0`），并支持 RaiSim + Rayrai 后端（`--physics raisim`）**：默认以 `1 kHz` 运行 MuJoCo 4.0（`.venv-mj4`），支持通过 `--physics mujoco --mujoco-version 3.3.7` 回退至 MuJoCo 3.3.7，或通过 `--physics raisim` 切换至 **RaiSim 物理引擎 + Rayrai 3D 渲染器**（支持 `--raisim-renderer rayrai|tcp`；旧参数 `--physics 4.0` / `3.3.7` 仍向下兼容）。
 - **实时“致命伤机级”高频抖动与冲击监测（JitterMonitor v3）**：
   - **50 Hz 零阶保持（ZOH）免疫**：不会把正常 `1–4 Hz` 步态或 20 ms 策略换帧阶梯误报为毛刺。
   - **全频段硬件损伤判据**：覆盖 `10–25 Hz` 持续 $I^2t$ 发热/减速器交变疲劳、`30–250 Hz` 盒内局部 PD/触地自激、ISO 20816 风格 `>= 10 Hz` 速度振动，以及按各关节真实 `kp / effort_limit` 折算的指令与力矩冲击。
@@ -62,11 +62,18 @@ bash scripts/setup_mujoco4_dev.sh
 ### 2. 运行真机仿真
 
 ```bash
-# 交互式 3D 仿真（默认 MuJoCo 4.0）
+# 交互式 3D 仿真（默认 --physics mujoco --mujoco-version 4.0）
 ./xrobot3 run --interface lo
 
+# 使用 RaiSim 物理引擎 + Rayrai 3D 渲染器（需本机具备 raisim2Lib 与 activation.raisim）
+./xrobot3 run --interface lo --physics raisim
+
+# RaiSim 无头冒烟测试 / RaisimServer TCP 可视化模式
+./xrobot3 run --interface lo --physics raisim --headless --seconds 5
+./xrobot3 run --interface lo --physics raisim --raisim-renderer tcp
+
 # 如需切换回 MuJoCo 3.3.7
-./xrobot3 run --interface lo --physics 3.3.7
+./xrobot3 run --interface lo --physics mujoco --mujoco-version 3.3.7
 
 # 无头模式快速冒烟测试（5 秒）
 ./xrobot3 run --interface lo --headless --seconds 5
@@ -156,7 +163,7 @@ Xrobot3/
 │   ├── common/                 # 力矩限幅器、机器人接口、终端与 WebSocket 控制台
 │   ├── config/                 # 真机与仿真 YAML 配置
 │   └── policy/
-│       ├── sdk_a_to/           # SDK-A 策略、deploy.json 契约、JitterMonitor 与 RenderBridge
+│       ├── sdk_a_to/           # SDK-A 策略、deploy.json 契约、JitterMonitor、RenderBridge 与 RaiSim 桥接/渲染器
 │       ├── dex_amp/            # DEXAMP 速度行走策略
 │       └── fix/                # FIX 站立目标与 PD 增益配置
 ├── xmujoco/                    # MuJoCo 仿真视图与异步通信桥
@@ -174,14 +181,15 @@ Xrobot3/
 # 1. 环境、29 自由度 ONNX/deploy 契约与 MuJoCo 4.0.0 模型校验
 ./xrobot3 check
 
-# 2. 离线 25 态切换、WALK/VEL、FILTER/REF 与 HANG 硬件隔离校验
+# 2. 离线 25 态切换、WALK/VEL、FILTER/REF、HANG 隔离与 RaiSim 后端契约校验
 source env.sh && python scripts/check_onboard_terminal.py
 .venv-mj4/bin/python scripts/check_sim_suspension.py
+.venv-mj4/bin/python scripts/check_raisim_backend.py
 
 # 3. SDK 自动更新与 MuJoCo 4.0 / 3.3.7 仿真冒烟测试
 ./xrobot3 sync
-./xrobot3 run --interface lo --headless --seconds 5
-./xrobot3 run --interface lo --physics 3.3.7 --headless --seconds 4
+./xrobot3 run --interface lo --physics mujoco --headless --seconds 5
+./xrobot3 run --interface lo --physics mujoco --mujoco-version 3.3.7 --headless --seconds 4
 ```
 
 - 每次运行的详细日志与抖动统计（`"jitter"` 字段）保存在 `output/` 目录下。

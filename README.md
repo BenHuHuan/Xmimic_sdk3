@@ -10,7 +10,7 @@ One SDK controller, 5-state FSM, PD torque limiter, and ONNX policy pipeline sha
 
 ## Key Features
 
-- **MuJoCo 4.0 Default Simulation (`--physics 4.0`)**: Runs physics at 1 kHz with MuJoCo 4.0 by default (`.venv-mj4`), with instant fallback to `--physics 3.3.7` (`.venv`).
+- **MuJoCo Simulation (`--physics mujoco`, default `4.0`) + RaiSim Backend (`--physics raisim`)**: Runs MuJoCo physics at 1 kHz by default (`--mujoco-version 4.0` via `.venv-mj4`, fallback `--mujoco-version 3.3.7` via `.venv`), or switches to `--physics raisim` (**RaiSim + Rayrai** 3D renderer or `--raisim-renderer tcp` `RaisimServer`). Legacy `--physics 4.0` / `3.3.7` aliases remain supported.
 - **Real-Time Fatal Hardware-Damage Jitter & Shock Monitor**:
   - **50 Hz ZOH-immune** signal processing separates normal 1–4 Hz locomotion and 20 ms policy steps from destructive hardware resonance.
   - Covers **10–25 Hz** sustained $I^2t$ thermal / gearbox alternating fatigue, **30–250 Hz** intra-window PD/contact hunting, **ISO 20816-inspired** $\ge 10\text{ Hz}$ velocity vibration, and **$k_p$-scaled** command/torque shocks.
@@ -62,11 +62,18 @@ bash scripts/setup_mujoco4_dev.sh
 ### 2. Run Simulation
 
 ```bash
-# Interactive 3D simulation (MuJoCo 4.0 default)
+# Interactive 3D simulation (MuJoCo 4.0 default: --physics mujoco --mujoco-version 4.0)
 ./xrobot3 run --interface lo
 
+# RaiSim physics + Rayrai 3D renderer (requires raisim2Lib + activation.raisim)
+./xrobot3 run --interface lo --physics raisim
+
+# RaiSim headless smoke test or RaisimServer TCP visualizer
+./xrobot3 run --interface lo --physics raisim --headless --seconds 5
+./xrobot3 run --interface lo --physics raisim --raisim-renderer tcp
+
 # Switch back to MuJoCo 3.3.7 if needed
-./xrobot3 run --interface lo --physics 3.3.7
+./xrobot3 run --interface lo --physics mujoco --mujoco-version 3.3.7
 
 # Headless smoke test (5 seconds)
 ./xrobot3 run --interface lo --headless --seconds 5
@@ -156,7 +163,7 @@ Xrobot3/
 │   ├── common/                 # Torque limiter, robot interface, terminal & websocket console
 │   ├── config/                 # Hardware & simulation YAML configs
 │   └── policy/
-│       ├── sdk_a_to/           # SDK-A ONNX, deploy.json contract, JitterMonitor & RenderBridge
+│       ├── sdk_a_to/           # SDK-A ONNX, deploy.json contract, JitterMonitor, RenderBridge & RaiSim bridge/worker/URDF
 │       ├── dex_amp/            # DEXAMP velocity locomotion policy
 │       └── fix/                # Fixed standing posture targets & PD gains
 ├── xmujoco/                    # MuJoCo simulator view & async bridge
@@ -174,14 +181,15 @@ Recommended pre-release verification suite:
 # 1. Environment, 29-DoF ONNX/deploy contract & MuJoCo 4.0.0 model check
 ./xrobot3 check
 
-# 2. Offline 25-transition FSM, WALK/VEL, FILTER/REF & HANG-exclusion check
+# 2. Offline 25-transition FSM, WALK/VEL, FILTER/REF, HANG-exclusion & RaiSim backend checks
 source env.sh && python scripts/check_onboard_terminal.py
 .venv-mj4/bin/python scripts/check_sim_suspension.py
+.venv-mj4/bin/python scripts/check_raisim_backend.py
 
 # 3. SDK auto-updater & MuJoCo 4.0 / 3.3.7 simulation smoke tests
 ./xrobot3 sync
-./xrobot3 run --interface lo --headless --seconds 5
-./xrobot3 run --interface lo --physics 3.3.7 --headless --seconds 4
+./xrobot3 run --interface lo --physics mujoco --headless --seconds 5
+./xrobot3 run --interface lo --physics mujoco --mujoco-version 3.3.7 --headless --seconds 4
 ```
 
 - Runtime logs and per-run summaries (including `"jitter"` metrics) are saved under `output/`.

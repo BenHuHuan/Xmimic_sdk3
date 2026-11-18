@@ -261,7 +261,9 @@ def gpu_render_check():
  except Exception:pass
 p=argparse.ArgumentParser(prog='xrobot3',description=__doc__);sub=p.add_subparsers(dest='cmd',required=True)
 r=sub.add_parser('run',help='Run local simulation, wired offboard, onboard, or SSH remote control');r.add_argument('--target',choices=['sim','real'],help=argparse.SUPPRESS);r.add_argument('--mode',choices=['onboard','offboard'],default='onboard',help=argparse.SUPPRESS);r.add_argument('--domain',type=int);r.add_argument('--interface',help='Network adapter: lo starts simulation; any other adapter connects to the robot');r.add_argument('--robot-ip');r.add_argument('--headless',action='store_true');r.add_argument('--seconds',type=float,default=5);r.add_argument('--dry-run',action='store_true')
-r.add_argument('--physics',choices=['4.0','3.3.7','dev','stable'],default='4.0',help='Simulator MuJoCo: 4.0/dev=MuJoCo 4.0 (.venv-mj4, default), 3.3.7/stable=MuJoCo 3.3.7 (.venv)')
+r.add_argument('--physics',choices=['mujoco','raisim','4.0','3.3.7','dev','stable'],default='mujoco',help='Simulator physics backend: mujoco (default) or raisim; legacy 4.0/3.3.7/dev/stable aliases select MuJoCo version')
+r.add_argument('--mujoco-version',choices=['4.0','3.3.7','dev','stable'],default='4.0',help='MuJoCo version when --physics mujoco: 4.0/dev (.venv-mj4, default) or 3.3.7/stable (.venv)')
+r.add_argument('--raisim-renderer',choices=['rayrai','tcp'],default='rayrai',help='RaiSim visualizer when --physics raisim: rayrai (default) or tcp (RaisimServer)')
 r.add_argument('--host',help='SSH alias or user@robot IP: run the SDK on the onboard computer')
 r.add_argument('--path',default='Xrobot3',help='Project path on the onboard computer')
 r.add_argument('--port',type=int,default=22,help='SSH port')
@@ -331,6 +333,7 @@ if a.cmd=='check':
  mj4_py=ROOT/'.venv-mj4/bin/python'
  sim_py=str(mj4_py) if os.access(mj4_py,os.X_OK) else sys.executable
  subprocess.run([sim_py,'-c',f"import mujoco; m=mujoco.MjModel.from_xml_path({str(ROOT/'sdk/policy/sdk_a_to/scene_unitree_visual.xml')!r}); print('Portable simulator model loaded:', m.nq, m.nv, '(MuJoCo', mujoco.__version__ + ')')"],check=True)
+ subprocess.run([sim_py,'-c',f"import json, sys, tempfile; from pathlib import Path; sys.path.insert(0, {str(ROOT/'sdk/policy/sdk_a_to')!r}); from raisim_urdf import mjcf_to_raisim_urdf; d=tempfile.mkdtemp(); m=mjcf_to_raisim_urdf({str(ROOT/'sdk/policy/sdk_a_to/scene_unitree_visual.xml')!r}, Path(d)/'tiangong3.urdf'); c=json.loads(Path({str(ROOT/'sdk/policy/sdk_a_to/deploy.json')!r}).read_text()); assert m['joint_names']==c['joint_names']; print('RaiSim URDF contract verified:', len(m['joint_names']), 'joints, mass=', round(m['total_mass'], 2), 'kg')"],check=True)
  sys.exit()
 if a.interface:
  inferred_target='sim' if a.interface=='lo' else 'real'
@@ -347,15 +350,24 @@ if a.target=='sim':
  env['XMIGCS_CONFIG']=str(ROOT/'sdk/config/sdk_a_sim.yaml')
  out=ROOT/'output'/datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
  python=sys.executable
- use_mj4=a.physics in ('4.0','dev')
+ use_raisim=a.physics=='raisim'
+ mj_ver=a.physics if a.physics in ('4.0','3.3.7','dev','stable') else a.mujoco_version
+ use_mj4=(not use_raisim) and (mj_ver in ('4.0','dev'))
  if use_mj4:
   # Default: MuJoCo 4.0 core bindings rebuilt for the ROS Python (vendor/wheels); same SDK/DDS path.
   python=str(ROOT/'.venv-mj4/bin/python')
-  if not os.access(python,os.X_OK):p.error(f'--physics {a.physics} needs .venv-mj4; run: bash scripts/setup_mujoco4_dev.sh (or pass --physics 3.3.7)')
+  if not os.access(python,os.X_OK):p.error(f'MuJoCo {mj_ver} needs .venv-mj4; run: bash scripts/setup_mujoco4_dev.sh (or pass --mujoco-version 3.3.7)')
   env['VIRTUAL_ENV']=str(ROOT/'.venv-mj4');env['PATH']=str(ROOT/'.venv-mj4/bin')+os.pathsep+env.get('PATH','')
- print('Physics:',a.physics,'(MuJoCo 4.0)' if use_mj4 else '(MuJoCo 3.3.7)',flush=True)
+ if use_raisim:
+  print('Physics: raisim',f'(RaiSim + {a.raisim_renderer})',flush=True)
+ else:
+  print('Physics: mujoco','(MuJoCo 4.0)' if use_mj4 else '(MuJoCo 3.3.7)',flush=True)
  if not a.headless:gpu_render_check()
  command=[python,str(ROOT/'sdk/policy/sdk_a_to/run_chain.py'),'pair','--standard-sdk','--output',str(out)]
+ if use_raisim:
+  command+=['--physics','raisim','--raisim-renderer',a.raisim_renderer]
+ else:
+  command+=['--physics','mujoco']
  command+=['--cases','normal_p0','--seconds',str(a.seconds)] if a.headless else ['--interactive']
 else:
  env['ROS_LOCALHOST_ONLY']='0';env['XMIGCS_CONFIG']=str(ROOT/'sdk/config/sdk_a_hardware.yaml')
