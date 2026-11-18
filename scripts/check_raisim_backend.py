@@ -254,27 +254,31 @@ a[0] = 0.0
 
 
 def check_cli_dry_run():
-    for renderer in ('rayrai', 'tcp'):
-        res = subprocess.run(
-            [
-                sys.executable,
-                str(ROOT / 'cli.py'),
-                'run',
-                '--interface', 'lo',
-                '--physics', 'raisim',
-                '--raisim-renderer', renderer,
-                '--headless',
-                '--seconds', '2',
-                '--dry-run',
-            ],
+    def run_dry(*extra):
+        return subprocess.run(
+            [sys.executable, str(ROOT / 'cli.py'), 'run', '--interface', 'lo', '--headless', '--seconds', '2', '--dry-run', *extra],
             cwd=str(ROOT),
             capture_output=True,
             text=True,
             check=True,
-        )
-        assert f'RaiSim + {renderer}' in res.stdout, res.stdout
-        assert f'--physics raisim --raisim-renderer {renderer}' in res.stdout, res.stdout
-    print('PASS: cli.py --physics raisim --dry-run')
+        ).stdout
+
+    out_default = run_dry()
+    assert 'Physics: mujoco (MuJoCo 4.0)' in out_default, out_default
+    assert '--physics mujoco' in out_default, out_default
+
+    out_mj3 = run_dry('--physics', 'mujoco', '--mujoco-version', '3.3.7')
+    assert 'Physics: mujoco (MuJoCo 3.3.7)' in out_mj3, out_mj3
+    assert '--physics mujoco' in out_mj3, out_mj3
+
+    out_legacy = run_dry('--physics', '3.3.7')
+    assert 'Physics: mujoco (MuJoCo 3.3.7)' in out_legacy, out_legacy
+
+    for renderer in ('rayrai', 'tcp'):
+        out_rs = run_dry('--physics', 'raisim', '--raisim-renderer', renderer)
+        assert f'Physics: raisim (RaiSim + {renderer})' in out_rs, out_rs
+        assert f'--physics raisim --raisim-renderer {renderer}' in out_rs, out_rs
+    print('PASS: cli.py --physics {mujoco,raisim} & --mujoco-version --dry-run')
 
 
 if __name__ == '__main__':
