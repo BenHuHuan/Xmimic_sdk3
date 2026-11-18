@@ -19,8 +19,11 @@ def qmul(a,b):
     w,x,y,z=a;v,i,j,k=b
     return np.array([w*v-x*i-y*j-z*k,w*i+x*v+y*k-z*j,w*j-x*k+y*v+z*i,w*k+x*j-y*i+z*v])
 def qrot(q):
-    import mujoco
-    r=np.empty(9);mujoco.mju_quat2Mat(r,q);return r.reshape(3,3)
+    w,x,y,z=map(float,q);n=np.sqrt(w*w+x*x+y*y+z*z)
+    if n>1e-12:w,x,y,z=w/n,x/n,y/n,z/n
+    else:w,x,y,z=1.,0.,0.,0.
+    xx,yy,zz=x*x,y*y,z*z;xy,xz,yz=x*y,x*z,y*z;wx,wy,wz=w*x,w*y,w*z
+    return np.array([[1-2*(yy+zz),2*(xy-wz),2*(xz+wy)],[2*(xy+wz),1-2*(xx+zz),2*(yz-wx)],[2*(xz-wy),2*(yz+wx),1-2*(xx+yy)]],dtype=np.float64)
 def spin(node):
     import rclpy
     while rclpy.ok():rclpy.spin_once(node,timeout_sec=.01)
@@ -87,14 +90,7 @@ def controller(args):
     try:rclpy.spin(node)
     finally:node.destroy_node();rclpy.shutdown()
 
-def simulator(args):
-    import mujoco, rclpy
-    from rclpy.node import Node
-    from std_msgs.msg import String
-    from bodyctrl_msgs.msg import CmdMotorCtrl,MotorStatusMsg,Imu
-    from simulator_view_asyn import RobotSimulator
-    from common.body_id_map import BodyServoIdMap
-    from prepare_cases import make_model
+def _load_cases(args):
     meta=json.loads((HERE/'manifest.json').read_text());meta.update(contract=str(HERE/'deploy.json'),scene=str(PROJECT/meta['scene']));contract=json.loads(Path(meta['contract']).read_text())
     protocol=json.loads((HERE/'protocol.json').read_text());fixtures=np.load(HERE/'fixtures.npz')
     cases=protocol['cases']
@@ -105,29 +101,56 @@ def simulator(args):
         cases=[dict(c, fixture_id=c['id'], force_N=args.push_force,
                     id=c['id'].replace(f"_{c['force_N']}_",f"_{args.push_force:g}_"))
                if c['kind']=='push' else c for c in cases]
-    args.output.mkdir(parents=True,exist_ok=True)
-    rclpy.init();node=Node('tiangong_xsim_sdk_a')
-    class AlignedSimulator(RobotSimulator):
-        def __init__(self):
-            # Keep upstream XML/source untouched; body/asset/PD contract comes from checkpoint.
+    return meta,contract,fixtures,cases
+
+def _make_record(t,began,qpos,qvel,tau,up,ground,penetration,tele,contract,case):
+    return dict(t=t,wall=time.monotonic()-began,qpos=qpos.copy(),qvel=qvel.copy(),
+        torque=tau.copy(),target=np.array(tele.get('target',contract['offset'])),
+        weights=np.array(tele.get('weights',[np.nan,np.nan])),phase=tele.get('phase',case['phase']),
+        height=float(qpos[2]),up=float(up),nonfoot_ground=bool(ground),
+        penetration=float(penetration),sensor_age=tele.get('sensor_age_s',np.nan),
+        group_skew=tele.get('sensor_group_skew_s',np.nan),policy_interval=tele.get('policy_interval_s') or np.nan,
+        counter=tele.get('counter',-1),telemetry_age=time.time()-tele.get('wall_time',time.time()))
+
+def _write_case_result(dest,case,records,nominal,began,sim_seconds,args,sim,plant,jitter_monitor,meta):
+    trace={key:np.asarray([r[key] for r in records]) for key in records[0]}
+    np.savez_compressed(dest/'trace.npz',**trace)
+    result=summarize(case,trace,nominal)
+    result.update(wall_seconds=time.monotonic()-began,sim_seconds=float(sim_seconds),pd_feedback=args.pd_feedback,
+        compute=args.compute,command_message_counts=sim.group_count,controller_external_process=True,
+        plant=plant,jitter=jitter_monitor.summary(),checkpoint_sha256=meta['checkpoint_sha256'])
+    (dest/'result.json').write_text(json.dumps(result,indent=2))
+    print(json.dumps(result),flush=True)
+
+def _wait_controller_ready(sim,case,args):
+    sim.last_raw_joint_commands.clear();sim.telemetry={};sim.group_count={g:0 for g in sim.group_count}
+    with sim.joint_cmd_lock:
+        while not sim.raw_joint_commands.empty():sim.raw_joint_commands.get_nowait()
+    sim.capture_sensors();started=time.monotonic()
+    while time.monotonic()-started<20:
+        sim.signal(case,False);sim.publish();sim.set_motor_cmd()
+        if (args.standard_sdk or sim.telemetry.get('id')==case['id']) and len(sim.last_raw_joint_commands)==29:
+            sim.signal(case,True)
+            return
+        time.sleep(.02)
+    raise RuntimeError('DDS startup incomplete: '+case['id'])
+
+def _build_ros_sim_class(node,meta,contract,args):
+    from std_msgs.msg import String
+    from bodyctrl_msgs.msg import CmdMotorCtrl,MotorStatusMsg,Imu
+    from simulator_view_asyn import RobotSimulator
+    from common.body_id_map import BodyServoIdMap
+    class _RosSim(RobotSimulator):
+        def _init_ros(self):
             self.node=node;self.debug=False
-            display_meta=dict(meta,scene=str(HERE/'scene_unitree_visual.xml')) if args.interactive else meta
-            self.model=make_model(display_meta);self.data=mujoco.MjData(self.model)
-            if args.compute=='training':
-                self.model.opt.timestep=.002;self.model.opt.solver=mujoco.mjtSolver.mjSOL_NEWTON;self.model.opt.iterations=10
             self.joint_names=contract['joint_names'];ids=BodyServoIdMap();ids.body_can_id_map_init()
             self.motor_id_to_joint={ids.get_id_by_index(i):name for i,name in enumerate(self.joint_names)}
             self.joint_to_motor_id={v:k for k,v in self.motor_id_to_joint.items()}
-            self.motor_actuator_indices_map={f'motor_{n}':self.model.actuator(n).id for n in self.joint_names}
             self.indices={n:i for i,n in enumerate(self.joint_names)}
             self.leg_joint_names=self.joint_names[:12];self.waist_joint_names=self.joint_names[12:15];self.arm_joint_names=self.joint_names[15:]
             self.joint_cmd_lock=threading.Lock();self.sensor_data_lock=threading.Lock()
             self.raw_joint_commands=queue.Queue(maxsize=1024);self.last_raw_joint_commands={};self.joint_commands={}
             self.last_sensor_data=None;self.telemetry={};self.performance={};self.group_count={'leg':0,'waist':0,'arm':0}
-            self.model.opt.timestep=.001
-            self.model.opt.solver=mujoco.mjtSolver.mjSOL_NEWTON
-            self.model.opt.iterations=100;self.model.opt.ls_iterations=50
-            self.model.opt.tolerance=1e-8
             for group in ('leg','waist','arm'):
                 setattr(self,group+'_status_pub',node.create_publisher(MotorStatusMsg,f'/{group}/status',10))
                 def callback(msg,group=group):
@@ -140,6 +163,162 @@ def simulator(args):
             node.create_subscription(String,'/xrobot3/sim_fix',lambda m:self.fix_requests.put(m.data),10)
             self.case_pub=node.create_publisher(String,'/sdk_a/case',10)
             self.mount=np.array([1.,0.,0.,0.] if args.standard_sdk else meta['imu_mount_quat']);self.mount_R=qrot(self.mount)
+        def _drain_raw_commands(self):
+            with self.joint_cmd_lock:
+                while not self.raw_joint_commands.empty():
+                    cmd=self.raw_joint_commands.get()
+                    jn=self.motor_id_to_joint[cmd.name]
+                    self.last_raw_joint_commands[jn]={'pos':cmd.pos,'spd':cmd.spd,'tor':cmd.tor,'kp':cmd.kp,'kd':cmd.kd}
+        def _pack_sensor_data(self,qpos,qvel,tau,pelvis_acc):
+            self.cached_q=qpos[7:].copy();self.cached_v=qvel[6:].copy()
+            self.last_sensor_data=dict(joint_positions=dict(zip(self.joint_names,qpos[7:].astype(float))),
+                joint_velocities=dict(zip(self.joint_names,qvel[6:].astype(float))),
+                joint_torques=dict(zip(self.joint_names,tau.astype(float))),
+                imu_orientation=qmul(qpos[3:7],self.mount),
+                imu_angular_velocity=self.mount_R.T@qvel[3:6],imu_linear_acceleration=self.mount_R.T@pelvis_acc)
+        def publish(self):
+            for group in ('leg','waist','arm'):
+                self._publish_joint_group(getattr(self,group+'_joint_names'),getattr(self,group+'_status_pub'),self.last_sensor_data)
+            self._publish_imu_status(self.imu_status_pub,self.last_sensor_data)
+        def signal(self,case,running):self.case_pub.publish(String(data=json.dumps(dict(id=case['id'],phase=case['phase'],running=running))))
+    return _RosSim
+
+def simulator(args):
+    import rclpy
+    from rclpy.node import Node
+    from jitter_monitor import JitterMonitor
+    meta,contract,fixtures,cases=_load_cases(args)
+    args.output.mkdir(parents=True,exist_ok=True)
+    rclpy.init();node=Node('tiangong_xsim_sdk_a')
+    RosSim=_build_ros_sim_class(node,meta,contract,args)
+    if args.physics=='raisim':
+        _simulator_raisim(args,node,RosSim,meta,contract,fixtures,cases,JitterMonitor)
+    else:
+        _simulator_mujoco(args,node,RosSim,meta,contract,fixtures,cases,JitterMonitor)
+
+def _simulator_raisim(args,node,RosSim,meta,contract,fixtures,cases,JitterMonitor):
+    import rclpy
+    from raisim_bridge import RaisimBridge
+    dt=.002 if args.compute=='training' else .001
+    substeps=round(.02/dt)
+    default_qdes=np.asarray(contract['offset'],dtype=np.float64)
+    display_scene=HERE/'scene_unitree_visual.xml' if (HERE/'scene_unitree_visual.xml').exists() else Path(meta['scene'])
+    bridge=RaisimBridge(display_scene,contract,args.output,dt=dt,viewer=bool(args.viewer),renderer=args.raisim_renderer,project_root=PROJECT)
+    class RaisimSimulator(RosSim):
+        def __init__(self):
+            self._init_ros()
+            self.cached_q=np.zeros(29);self.cached_v=np.zeros(29)
+            self._q_des=default_qdes.copy();self._dq_des=np.zeros(29)
+            self._kp=np.zeros(29);self._kd=np.zeros(29);self._tau_ff=np.zeros(29)
+        def set_motor_cmd(self):
+            self._drain_raw_commands()
+            for i,jn in enumerate(self.joint_names):
+                c=self.last_raw_joint_commands.get(jn)
+                if c is not None:
+                    self._q_des[i]=float(c['pos']);self._dq_des[i]=float(c['spd'])
+                    self._tau_ff[i]=float(c['tor']);self._kp[i]=float(c['kp']);self._kd[i]=float(c['kd'])
+                else:
+                    self._q_des[i]=float(default_qdes[i]);self._dq_des[i]=0.;self._tau_ff[i]=0.;self._kp[i]=0.;self._kd[i]=0.
+            bridge.set_motor_targets(self._q_des,self._dq_des,self._kp,self._kd,self._tau_ff)
+        def capture_sensors(self):
+            self._pack_sensor_data(bridge.qpos,bridge.qvel,bridge.tau_meas,bridge.pelvis_acc)
+    sim=RaisimSimulator()
+    thread=threading.Thread(target=spin,args=(node,),daemon=True);thread.start()
+    jitter_monitor=JitterMonitor(sim.joint_names,contract['effort'],dt=dt,policy_dt=.02,kp=contract.get('kp'))
+    try:
+        for case in cases:
+            dest=args.output/case['id'];dest.mkdir(exist_ok=True)
+            if (dest/'result.json').exists():continue
+            fixture_id=case.get('fixture_id',case['id'])
+            init_qpos=fixtures[fixture_id+'_qpos'];init_qvel=fixtures[fixture_id+'_qvel']
+            bridge.reset(init_qpos,init_qvel)
+            jitter_monitor.reset()
+            _wait_controller_ready(sim,case,args)
+            records=deque(maxlen=3000) if args.interactive else []
+            began=time.monotonic();deadline=began;last_pub=began
+            nominal=contract['root_pos'][2];seconds=args.seconds or case['seconds']
+            push_vector=np.zeros(3)
+            if case['kind']=='push':
+                angle=np.deg2rad(case['angle_deg']);direction=np.array([np.cos(angle),np.sin(angle),0.])
+            for step in (itertools.count() if args.interactive else range(round(seconds/dt))):
+                if args.viewer and not bridge.is_running():break
+                if args.interactive and bridge.poll_reset_request():
+                    bridge.reset(init_qpos,init_qvel);jitter_monitor.reset()
+                    sim.capture_sensors();sim.publish();deadline=time.monotonic()
+                if args.interactive and bridge.is_paused():
+                    now=time.monotonic()
+                    if now-last_pub>=.01:
+                        sim.capture_sensors();sim.publish();last_pub=now
+                    while not sim.fix_requests.empty():
+                        bridge.send_hang_command(sim.fix_requests.get_nowait())
+                    bridge.update_hud(sim.performance,jitter_monitor=jitter_monitor)
+                    if not bridge.step(0):break
+                    deadline=time.monotonic();time.sleep(0.01);continue
+                if step%max(1,round(.01/dt))==0:sim.capture_sensors()
+                now=time.monotonic()
+                if now-last_pub>=.0025:
+                    sim.capture_sensors();sim.publish();last_pub=now
+                sim.set_motor_cmd()
+                t=step*dt
+                push_active=case['kind']=='push' and case['push_time_s']<=t<case['push_time_s']+.2
+                if push_active:
+                    if not np.any(push_vector):
+                        qpos=bridge.qpos
+                        yaw=np.arctan2(2*(qpos[3]*qpos[6]+qpos[4]*qpos[5]),1-2*(qpos[5]**2+qpos[6]**2))
+                        push_vector=case['force_N']*np.array([np.cos(yaw)*direction[0]-np.sin(yaw)*direction[1],np.sin(yaw)*direction[0]+np.cos(yaw)*direction[1],0])
+                    bridge.set_push_force(push_vector,True)
+                else:
+                    bridge.set_push_force((0.,0.,0.),False)
+                while not sim.fix_requests.empty():
+                    bridge.send_hang_command(sim.fix_requests.get_nowait())
+                if args.viewer and step%2==0:
+                    bridge.update_hud(sim.performance,jitter_monitor=jitter_monitor)
+                if not bridge.step(1):break
+                qpos=bridge.qpos;qvel=bridge.qvel;tau_meas=bridge.tau_meas
+                if not np.isfinite(qpos).all():raise RuntimeError('Nonfinite state '+case['id'])
+                q_des=np.array([float(sim.last_raw_joint_commands[n]['pos']) if n in sim.last_raw_joint_commands else float(default_qdes[i]) for i,n in enumerate(sim.joint_names)],dtype=np.float64)
+                jitter_monitor.update(qvel[6:],tau_meas,q_des=q_des)
+                if step%substeps==0:
+                    tele=sim.telemetry;up=qrot(qpos[3:7])[2,2]
+                    record=_make_record(t+dt,began,qpos,qvel,tau_meas,up,bridge.nonfoot_ground,bridge.max_penetration,tele,contract,case)
+                    records.append(record)
+                    if step%1000==0:
+                        susp_en,susp_z,susp_k=bridge.suspension_state()
+                        status=dict(suspension_stiffness=susp_k,suspension_enabled=susp_en,suspension_target_height=susp_z,
+                            physics_backend='raisim',raisim_renderer=args.raisim_renderer,
+                            physics_dt_s=dt,physics_hz=1/dt,performance=sim.performance,sim_s=bridge.sim_time,
+                            wall_s=time.monotonic()-began,height=float(qpos[2]),up=float(up),gate=record['weights'].tolist(),
+                            policy_counter=record['counter'],sensor_age_s=record['sensor_age'],policy_dt_s=record['policy_interval'],
+                            motor_count=len(sim.last_raw_joint_commands),jitter=jitter_monitor.summary())
+                        if args.viewer:status.update(viewer_fps=bridge.viewer_fps,render_separate_process=True)
+                        (args.output/'live_status.json').write_text(json.dumps(status))
+                deadline+=dt
+                remaining=deadline-time.monotonic()
+                if remaining>0:time.sleep(remaining)
+                elif remaining<-.1:deadline=time.monotonic()
+            if args.interactive:return
+            _write_case_result(dest,case,records,nominal,began,bridge.sim_time,args,sim,
+                dict(backend='raisim',renderer=args.raisim_renderer,dt=dt),jitter_monitor,meta)
+    finally:
+        bridge.close()
+        rclpy.shutdown();thread.join(timeout=2);node.destroy_node()
+
+def _simulator_mujoco(args,node,RosSim,meta,contract,fixtures,cases,JitterMonitor):
+    import mujoco, rclpy
+    from prepare_cases import make_model
+    class AlignedSimulator(RosSim):
+        def __init__(self):
+            # Keep upstream XML/source untouched; body/asset/PD contract comes from checkpoint.
+            display_meta=dict(meta,scene=str(HERE/'scene_unitree_visual.xml')) if args.interactive else meta
+            self.model=make_model(display_meta);self.data=mujoco.MjData(self.model)
+            if args.compute=='training':
+                self.model.opt.timestep=.002;self.model.opt.solver=mujoco.mjtSolver.mjSOL_NEWTON;self.model.opt.iterations=10
+            self._init_ros()
+            self.motor_actuator_indices_map={f'motor_{n}':self.model.actuator(n).id for n in self.joint_names}
+            self.model.opt.timestep=.001
+            self.model.opt.solver=mujoco.mjtSolver.mjSOL_NEWTON
+            self.model.opt.iterations=100;self.model.opt.ls_iterations=50
+            self.model.opt.tolerance=1e-8
             self.acc_sensor_id=self.model.sensor('imu_in_pelvis_acc').id if any(self.model.sensor(i).name=='imu_in_pelvis_acc' for i in range(self.model.nsensor)) else -1
             self.cached_q=np.zeros(29);self.cached_v=np.zeros(29)
         def get_status(self,name):
@@ -148,18 +327,8 @@ def simulator(args):
             return dict(position=self.data.qpos[7+i],velocity=self.data.qvel[6+i],torque=0.)
         def capture_sensors(self):
             d=self.data
-            self.cached_q=d.qpos[7:].copy();self.cached_v=d.qvel[6:].copy()
             pelvis_acc=d.sensor(self.acc_sensor_id).data.astype(float) if self.acc_sensor_id>=0 else np.zeros(3)
-            self.last_sensor_data=dict(joint_positions=dict(zip(self.joint_names,d.qpos[7:].astype(float))),
-                joint_velocities=dict(zip(self.joint_names,d.qvel[6:].astype(float))),
-                joint_torques=dict(zip(self.joint_names,d.actuator_force.astype(float))),
-                imu_orientation=qmul(d.qpos[3:7],self.mount),
-                imu_angular_velocity=self.mount_R.T@d.qvel[3:6],imu_linear_acceleration=self.mount_R.T@pelvis_acc)
-        def publish(self):
-            for group in ('leg','waist','arm'):
-                self._publish_joint_group(getattr(self,group+'_joint_names'),getattr(self,group+'_status_pub'),self.last_sensor_data)
-            self._publish_imu_status(self.imu_status_pub,self.last_sensor_data)
-        def signal(self,case,running):self.case_pub.publish(String(data=json.dumps(dict(id=case['id'],phase=case['phase'],running=running))))
+            self._pack_sensor_data(d.qpos,d.qvel,d.actuator_force,pelvis_acc)
     sim=AlignedSimulator();model=sim.model;d=sim.data
     thread=threading.Thread(target=spin,args=(node,),daemon=True);thread.start()
     viewer=None;render_bridge=None
@@ -170,7 +339,6 @@ def simulator(args):
         import mujoco.viewer
         viewer=mujoco.viewer.launch_passive(model,d);viewer.cam.distance=3.5;viewer.cam.elevation=-25
     from sim_suspension import SimSuspension
-    from jitter_monitor import JitterMonitor
     suspension=SimSuspension(float(model.body_mass.sum()))
     suspension_body=model.body('waist_pitch_link').id
     dt=float(model.opt.timestep);substeps=round(.02/dt)
@@ -184,17 +352,7 @@ def simulator(args):
             mujoco.mj_resetData(model,d);d.qpos[:]=fixtures[fixture_id+'_qpos'];d.qvel[:]=fixtures[fixture_id+'_qvel']
             mujoco.mj_forward(model,d)
             jitter_monitor.reset()
-            sim.last_raw_joint_commands.clear();sim.telemetry={};sim.group_count={g:0 for g in sim.group_count}
-            with sim.joint_cmd_lock:
-                while not sim.raw_joint_commands.empty():sim.raw_joint_commands.get_nowait()
-            sim.capture_sensors();started=time.monotonic();ready=False
-            while time.monotonic()-started<20:
-                sim.signal(case,False);sim.publish();sim.set_motor_cmd()
-                if (args.standard_sdk or sim.telemetry.get('id')==case['id']) and len(sim.last_raw_joint_commands)==29:
-                    ready=True;break
-                time.sleep(.02)
-            if not ready:raise RuntimeError('DDS startup incomplete: '+case['id'])
-            sim.signal(case,True)
+            _wait_controller_ready(sim,case,args)
             records=deque(maxlen=3000) if args.interactive else [];began=time.monotonic();deadline=began;last_pub=began
             nominal=contract['root_pos'][2];seconds=args.seconds or case['seconds']
             push_vector=np.zeros(3)
@@ -256,13 +414,7 @@ def simulator(args):
                             ground|=model.body(other).name not in ('ankle_roll_l_link','ankle_roll_r_link')
                         penetration=max(penetration,-float(ct.dist))
                     up=qrot(d.qpos[3:7])[2,2]
-                    record=dict(t=t+dt,wall=time.monotonic()-began,qpos=d.qpos.copy(),qvel=d.qvel.copy(),
-                        torque=d.actuator_force.copy(),target=np.array(tele.get('target',contract['offset'])),
-                        weights=np.array(tele.get('weights',[np.nan,np.nan])),phase=tele.get('phase',case['phase']),
-                        height=float(d.qpos[2]),up=float(up),nonfoot_ground=ground,
-                        penetration=penetration,sensor_age=tele.get('sensor_age_s',np.nan),
-                        group_skew=tele.get('sensor_group_skew_s',np.nan),policy_interval=tele.get('policy_interval_s') or np.nan,
-                        counter=tele.get('counter',-1),telemetry_age=time.time()-tele.get('wall_time',time.time()))
+                    record=_make_record(t+dt,began,d.qpos,d.qvel,d.actuator_force,up,ground,penetration,tele,contract,case)
                     records.append(record)
                     if step%1000==0:
                         status=dict(suspension_stiffness=suspension.stiffness,suspension_enabled=suspension.enabled,suspension_target_height=float(suspension.target[2]),physics_dt_s=dt,physics_hz=1/dt,performance=sim.performance,sim_s=float(d.time),wall_s=time.monotonic()-began,height=float(d.qpos[2]),up=float(up),gate=record['weights'].tolist(),policy_counter=record['counter'],sensor_age_s=record['sensor_age'],policy_dt_s=record['policy_interval'],motor_count=len(sim.last_raw_joint_commands),solver_iterations=int(model.opt.iterations),ls_iterations=int(model.opt.ls_iterations),jitter=jitter_monitor.summary())
@@ -279,16 +431,9 @@ def simulator(args):
                 if remaining>0:time.sleep(remaining)
                 elif remaining<-.1:deadline=time.monotonic()
             if args.interactive:return
-            trace={key:np.asarray([r[key] for r in records]) for key in records[0]}
-            np.savez_compressed(dest/'trace.npz',**trace)
-            result=summarize(case,trace,nominal)
-            result.update(wall_seconds=time.monotonic()-began,sim_seconds=float(d.time),pd_feedback=args.pd_feedback,
-                compute=args.compute,command_message_counts=sim.group_count,controller_external_process=True,
-                plant=dict(dt=dt,solver=int(model.opt.solver),iterations=int(model.opt.iterations),ls_iterations=int(model.opt.ls_iterations)),
-                jitter=jitter_monitor.summary(),
-                checkpoint_sha256=meta['checkpoint_sha256'])
-            (dest/'result.json').write_text(json.dumps(result,indent=2))
-            print(json.dumps(result),flush=True)
+            _write_case_result(dest,case,records,nominal,began,float(d.time),args,sim,
+                dict(dt=dt,solver=int(model.opt.solver),iterations=int(model.opt.iterations),ls_iterations=int(model.opt.ls_iterations)),
+                jitter_monitor,meta)
     finally:
         if viewer:viewer.close()
         if render_bridge:render_bridge.close()
@@ -332,11 +477,16 @@ def main():
     p.add_argument('--compute',choices=['native','training'],default='native')
     p.add_argument('--interactive',action='store_true')
     p.add_argument('--standard-sdk',action='store_true',help='Run the same rl_control_node as hardware')
+    p.add_argument('--physics',choices=['mujoco','raisim'],default='mujoco',help='Simulator physics engine backend')
+    p.add_argument('--raisim-renderer',choices=['rayrai','tcp'],default='rayrai',help='Visualizer when --physics raisim')
     a=p.parse_args()
     if a.interactive:
         a.viewer=True;a.cases='normal_p0'
         _m=json.loads((HERE/'manifest.json').read_text())
-        print(f"INTERACTIVE: Tiangong SDK-A {_m.get('training_run','TO 30k')} [{_m['checkpoint_sha256'][:12]}] | xMIGCS -> ROS2/FastDDS -> xmujoco | Newton100 LS50 1000Hz | no automatic push | double-click torso, Ctrl+right drag | close window to exit",flush=True)
+        if a.physics=='raisim':
+            print(f"INTERACTIVE: Tiangong SDK-A {_m.get('training_run','TO 30k')} [{_m['checkpoint_sha256'][:12]}] | xMIGCS -> ROS2/FastDDS -> RaiSim ({a.raisim_renderer}) | 1000Hz | F9/9=hang, Up/Down=lift/lower, F10/0/Del=release, R=reset, Space=pause | close window to exit",flush=True)
+        else:
+            print(f"INTERACTIVE: Tiangong SDK-A {_m.get('training_run','TO 30k')} [{_m['checkpoint_sha256'][:12]}] | xMIGCS -> ROS2/FastDDS -> xmujoco | Newton100 LS50 1000Hz | no automatic push | double-click torso, Ctrl+right drag | close window to exit",flush=True)
     if os.getenv('ROS_LOCALHOST_ONLY')!='1' and not a.standard_sdk:raise RuntimeError('Legacy evaluation uses localhost-only DDS')
     if a.role=='controller':controller(a)
     elif a.role=='simulator':simulator(a)

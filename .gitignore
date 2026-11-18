@@ -21,5 +21,8 @@ sdk/policy/sdk_a_to/*.before_*
 sdk/policy/sdk_a_to/*before*.txt
 MUJOCO_LOG.TXT
 *.bag
+rayrai_cache_*
+*.rgeo
+*.rimp
 
 sdk/AGENTS.md.tbd
